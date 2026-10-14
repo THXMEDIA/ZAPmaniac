@@ -2145,6 +2145,86 @@ func _run_map_mode_checks() -> void:
 	_check("map: compass bearing is -yaw (facing west at yaw 90 deg)", is_equal_approx(hud.compass_bearing(), -PI * 0.5))
 	main.player.yaw = 0.0
 
+	# ---- KARTE (rules version 4): full map for 2 s on M, then 10 s wait ----
+	var m_key := InputEventKey.new()
+	m_key.physical_keycode = KEY_M
+	m_key.pressed = true
+	_check("karte: the chip is shown with the local map and names the key", hud.map_chip.visible and hud.map_chip_label.text == "[M]")
+	main.start_hold = true
+	main._update_map_peek_hud()
+	_check("karte: chip dimmed during the start hold", hud.map_chip_label.modulate.a < 0.9)
+	main._unhandled_input(m_key)
+	_check("karte: no full map during the start hold (clock not running), the press is flagged", not hud.is_map_peek_open() and hud._map_chip_flash > 0.0)
+	hud._map_chip_flash = 0.0
+	main.start_hold = false
+	main._unhandled_input(m_key)
+	_check("karte: M opens the full map", hud.is_map_peek_open() and hud.map_chip_label.text == "OFFEN")
+	var ready_at: float = main.map_peek_ready_at
+	_check("karte: open for 2 s, then 10 s wait", is_equal_approx(main.map_peek_until - main.now, LevelsScript.MAP_PEEK_S) and is_equal_approx(ready_at - main.map_peek_until, LevelsScript.MAP_PEEK_COOLDOWN_S))
+	main._unhandled_input(m_key)
+	_check("karte: a second press while open changes nothing", main.map_peek_ready_at == ready_at)
+	main.now += LevelsScript.MAP_PEEK_S + 0.05
+	main._update_map_peek_hud()
+	_check("karte: after 2 s back to the local map, chip counts down", not hud.is_map_peek_open() and hud.map_chip_label.text == "10 s")
+	_check("karte: the key does nothing during the wait", not main.try_map_peek())
+	main.now = ready_at + 0.01
+	main._update_map_peek_hud()
+	_check("karte: after the wait the chip shows the key again", hud.map_chip_label.text == "[M]")
+	hud.set_minimap_visible(false)
+	_check("karte: not while the minimap is off (Stromausfall)", not main.try_map_peek())
+	hud.set_minimap_visible(true)
+	main.paused = true
+	_check("karte: not in the pause", not main.try_map_peek())
+	main.paused = false
+	_check("karte: works again when ready", main.try_map_peek() and hud.is_map_peek_open())
+	var wait_before: float = main.map_peek_ready_at
+	main.toggle_pause()
+	_check("karte: the pause closes the full map, the wait stays", main.paused and not hud.is_map_peek_open() and main.map_peek_ready_at == wait_before)
+	main.toggle_pause()
+	_check("karte: it stays closed after the pause", not main.paused and not hud.is_map_peek_open())
+	main.now = main.map_peek_ready_at + 0.01
+	main._update_map_peek_hud()
+	main.try_map_peek()
+	hud.set_minimap_visible(false)
+	main._update_map_peek_hud()
+	_check("karte: a blackout during KARTE closes it", not hud.is_map_peek_open())
+	hud.set_minimap_visible(true)
+	main.now = main.map_peek_until + 0.01
+	main._update_map_peek_hud()
+	_check("karte: after the blackout it does not open again by itself", not hud.is_map_peek_open())
+
+	# ---- HUD layout (UX-K2 10.10.): compass under the minimap, centre stacked ----
+	var mm_rect: Rect2 = hud.minimap.get_global_rect()
+	var cp_rect: Rect2 = hud.compass.get_global_rect()
+	_check("hud: the compass hangs under the minimap, same width", cp_rect.position.y >= mm_rect.end.y and is_equal_approx(cp_rect.size.x, mm_rect.size.x) and absf(cp_rect.position.x - mm_rect.position.x) < 0.5, "%s / %s" % [cp_rect, mm_rect])
+	_check("hud: the compass is part of the in-game HUD", hud.compass.get_parent() == hud.game_hud)
+	main.paused = true # Main's frame must not hide the power bar / card again
+	hud.set_power_timer(5.0, 10.0)
+	hud.show_split(25, 12.0, -0.5, true)
+	hud.condition_card.visible = true
+	await get_tree().process_frame
+	await get_tree().process_frame
+	var centre := [hud.power_wrap, hud.split_box, hud.condition_card]
+	var overlap := false
+	for i in centre.size():
+		for j in range(i + 1, centre.size()):
+			if centre[i].get_global_rect().intersects(centre[j].get_global_rect()):
+				overlap = true
+	for c in centre:
+		if c.get_global_rect().intersects(cp_rect):
+			overlap = true
+	_check("hud: ENERGIE, Zwischenzeit and Titelkarte stack without overlap (and clear of the compass)", not overlap and hud.power_wrap.get_global_rect().position.y < hud.split_box.get_global_rect().position.y and hud.split_box.get_global_rect().position.y < hud.condition_card.get_global_rect().position.y)
+	var rb: Control = hud.versus_ui.race_bar
+	rb.visible = true
+	await get_tree().process_frame
+	await get_tree().process_frame
+	_check("hud: in Versus the stack starts below the race bar", hud.power_wrap.get_global_rect().position.y >= rb.get_global_rect().end.y and not rb.get_global_rect().intersects(cp_rect))
+	rb.visible = false
+	hud.condition_card.visible = false
+	hud.hide_split()
+	hud.set_power_timer(0.0, 10.0)
+	main.paused = false
+
 	# ---- Training: full map, nothing recorded ----
 	var best_before: float = Speedrun.best_for("klassik-1")
 	var top_before: int = Leaderboard.get_top("klassik-1", "woche", 50).size()
@@ -2152,6 +2232,7 @@ func _run_map_mode_checks() -> void:
 	await get_tree().process_frame
 	await get_tree().process_frame
 	_check("training: flag set, full map, no compass", main.training_mode and hud.effective_map_mode() == 0 and hud.minimap.visible and not hud.compass.visible)
+	_check("training: no KARTE chip, the key does nothing", not hud.map_chip.visible and not main.try_map_peek())
 	_check("training: the level is the chosen one", main.level_id == "klassik-1")
 	_check("training: the board badge says TRAINING", hud.board_label.text == "TRAINING")
 	main.level_start_real = main.real_now - 61.0

@@ -21,10 +21,6 @@ const LevelsScript := preload("res://scripts/levels.gd")
 const INTERMISSION_S := 12.0
 ## After both pressed REVANCHE, the host starts round 1 after this.
 const REMATCH_START_S := 5.0
-## Where the condition card goes in a Versus round: under the race bar (QA W5).
-const CARD_TOP_VERSUS := 236.0
-const CARD_TOP_SOLO := 56.0
-
 var main: Node
 var hud
 var ui
@@ -168,7 +164,6 @@ func leave() -> void:
 	duel.active = false
 	Twitch.leave_extras()
 	hud.minimap_opponent_cell = Vector2i(-1, -1)
-	hud.set_condition_card_top(CARD_TOP_SOLO)
 	if _saved_week_override.x >= 0:
 		main.rabbit_week_override = _saved_week_override
 		_saved_week_override = Vector2i(-1, -1)
@@ -198,7 +193,6 @@ func _on_round_started(round: int, go_in: float) -> void:
 	_opp_frac = 0.0
 	_opp_lives = 3
 	hud.minimap_opponent_cell = Vector2i(-1, -1)
-	hud.set_condition_card_top(CARD_TOP_VERSUS)
 	ui.set_race_status("")
 	if _saved_week_override.x < 0:
 		_saved_week_override = main.rabbit_week_override

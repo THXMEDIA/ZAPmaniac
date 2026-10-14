@@ -14,6 +14,18 @@ extends RefCounted
 ##   "durchbruch" 3 doors in the closed middle column => the two halves are
 ##                no longer connected only by the wrap tunnel
 
+## Rules version of every timed run (Speedrun, Versus). Times of different
+## rules versions are not comparable: the save files archive older boards
+## (speedrun.gd / leaderboard.gd) and Versus only pairs equal versions.
+##   1  until 06.10.2026: no Dash, no Kehrtwende, full map
+##   2  06.10.2026: Bewegungs-Paket (Dash + Kehrtwende), full map
+##   3  08.10.2026: local map (4 cells around the player) + compass (ZAP-6)
+##   4  14.10.2026: as 3, plus KARTE: full map for MAP_PEEK_S on a key,
+##      then MAP_PEEK_COOLDOWN_S until the next look
+const RULES_VERSION := 4
+const MAP_PEEK_S := 2.0
+const MAP_PEEK_COOLDOWN_S := 10.0
+
 ## Player speed (player_controller.gd PLAYER_SPEED) and the length of one
 ## grid step (maze_view.gd CELL) — the basis of reference_route_seconds().
 const PLAYER_SPEED := 5.31

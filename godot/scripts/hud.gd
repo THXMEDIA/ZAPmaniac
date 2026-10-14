@@ -138,6 +138,18 @@ var map_mode := 0
 var _minimap_on := true
 var compass: Control
 const LOCAL_RADIUS := 4 # cells around the player in the Lokal mode
+## KARTE (rules version 4): while true the Lokal minimap draws the full maze
+## (Main opens it for Levels.MAP_PEEK_S on the "map_peek" key).
+var _map_peek := false
+var map_chip: Control
+var map_chip_label: Label
+var _map_key_text := ""
+var _map_chip_flash := 0.0
+## Top centre (UX-K2 / Code-W2 of 10.10.): ENERGIE, Zwischenzeit and the
+## condition card stack in one container instead of fixed pixel offsets; in
+## Versus it starts below the race bar.
+var top_stack: VBoxContainer
+const TOP_STACK_Y := 14.0
 var reduce_rain_pause: CheckBox
 ## UX-K1 comfort sliders, one pair on the start screen, one in the pause.
 var fov_sliders: Array = []
@@ -235,6 +247,7 @@ var minimap_frightened := false
 
 func _ready() -> void:
 	_build_hud_bar()
+	_build_top_stack()
 	_build_power_timer()
 	_build_flip_frame()
 	_build_start_panel()
@@ -250,6 +263,9 @@ func _ready() -> void:
 	_build_split_box()
 	_build_compass()
 	_build_hint_box()
+	top_stack.move_child(power_wrap, 0)
+	top_stack.move_child(split_box, 1)
+	top_stack.move_child(condition_card, 2)
 	versus_ui = load("res://scripts/versus_ui.gd").new()
 	add_child(versus_ui)
 	versus_ui.setup(self)
@@ -291,6 +307,10 @@ func _build_hud_bar() -> void:
 
 	dash_label = _make_chip(left, "DASH", "●")
 	dash_chip = dash_label.get_parent().get_parent()
+	# KARTE (rules version 4): key + state of the 2-second full map.
+	map_chip_label = _make_chip(left, "KARTE", "")
+	map_chip = map_chip_label.get_parent().get_parent()
+	map_chip.visible = false
 
 	# Debug overlay (FPS / player position / cell) — hidden unless
 	# set_debug_overlay(true) is called (F3 in debug builds, see main.gd).
@@ -364,16 +384,36 @@ func is_game_hud_visible() -> bool:
 	return game_hud.visible
 
 
+func _build_top_stack() -> void:
+	top_stack = VBoxContainer.new()
+	top_stack.name = "TopStack"
+	top_stack.set_anchors_preset(Control.PRESET_CENTER_TOP)
+	top_stack.grow_horizontal = Control.GROW_DIRECTION_BOTH
+	top_stack.offset_top = TOP_STACK_Y
+	top_stack.offset_bottom = TOP_STACK_Y
+	top_stack.add_theme_constant_override("separation", 10)
+	top_stack.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(top_stack)
+
+
+## Versus: the stack starts below the race bar (its height changes with the
+## duel lines), otherwise at TOP_STACK_Y. Called every frame.
+func _place_top_stack() -> void:
+	var y := TOP_STACK_Y
+	if versus_ui != null and versus_ui.race_bar != null and versus_ui.race_bar.visible:
+		y = versus_ui.race_bar.position.y + versus_ui.race_bar.size.y + 8.0
+	if top_stack.offset_top != y:
+		top_stack.offset_top = y
+		top_stack.offset_bottom = y
+
+
 func _build_power_timer() -> void:
 	power_wrap = Control.new()
+	power_wrap.name = "PowerTimer"
 	power_wrap.custom_minimum_size = Vector2(160, 34)
-	power_wrap.set_anchors_preset(Control.PRESET_CENTER_TOP)
-	power_wrap.offset_left = -80
-	power_wrap.offset_right = 80
-	power_wrap.offset_top = 46 # below the compass strip (ZAP-6)
-	power_wrap.offset_bottom = 80
+	power_wrap.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 	power_wrap.visible = false
-	add_child(power_wrap)
+	top_stack.add_child(power_wrap)
 	var panel := PanelContainer.new()
 	panel.add_theme_stylebox_override("panel", _panel_style())
 	panel.set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -769,9 +809,60 @@ func _refresh_map_mode() -> void:
 	var m := effective_map_mode()
 	minimap.visible = _minimap_on and m != SettingsScript.MAP_OFF
 	if compass != null:
-		compass.visible = _minimap_on and m != SettingsScript.MAP_FULL and game_hud != null and game_hud.visible
+		# a child of game_hud: it is only ever drawn with the in-game HUD
+		compass.visible = _minimap_on and m != SettingsScript.MAP_FULL
 		compass.queue_redraw()
+	if map_chip != null:
+		map_chip.visible = m == SettingsScript.MAP_LOCAL
 	minimap.queue_redraw()
+
+
+## KARTE (rules version 4): `open` = the full map is shown right now,
+## `cooldown_left` = seconds until the key works again (0 = ready). The chip
+## shows the key when ready, "OFFEN" while open, else the seconds left.
+## `usable` false = the key does nothing right now (start hold): dimmed.
+func set_map_peek(open: bool, cooldown_left: float, usable: bool = true) -> void:
+	if open != _map_peek:
+		_map_peek = open
+		minimap.queue_redraw()
+	if map_chip_label == null:
+		return
+	var text: String
+	var alpha := 1.0
+	if open:
+		text = "OFFEN"
+	elif cooldown_left > 0.0:
+		text = "%d s" % ceili(cooldown_left)
+		alpha = 0.55
+	else:
+		if _map_key_text == "":
+			_map_key_text = map_peek_key_text()
+		text = "[%s]" % _map_key_text if _minimap_on else "–"
+		if not (_minimap_on and usable):
+			alpha = 0.55
+	if map_chip_label.text != text:
+		map_chip_label.text = text
+	map_chip_label.modulate = Color(1, 1, 1, alpha)
+	if _map_chip_flash > 0.0:
+		_map_chip_flash -= get_process_delta_time()
+		map_chip_label.modulate = Color(ACCENT, 1.0)
+
+
+## A pressed KARTE key that does nothing: the chip shows it for 0.3 s
+## (no blinking, UX-W3).
+func flash_map_chip() -> void:
+	_map_chip_flash = 0.3
+	if map_chip_label != null:
+		map_chip_label.modulate = Color(ACCENT, 1.0)
+
+
+func is_map_peek_open() -> bool:
+	return _map_peek
+
+
+## The key shown in the KARTE chip and in the Steuerung.
+func map_peek_key_text() -> String:
+	return _key_name("map_peek", "M")
 
 
 ## Shows the stored comfort values on both blocks without re-emitting.
@@ -892,11 +983,6 @@ func set_versus_pause(on: bool) -> void:
 	pause_confirm_yes.text = "JA, AUFGEBEN" if on else "JA, ZUM MENÜ"
 	if on:
 		pause_note_label.text = "Die Rennuhr läuft weiter – der Gegner läuft auch."
-
-
-## Versus: the condition card sits below the race bar (QA W5).
-func set_condition_card_top(px: float) -> void:
-	condition_card.offset_top = px
 
 
 ## Whether HAUPTMENÜ in the pause asks first (speedrun: yes; Manhattan: no).
@@ -1050,6 +1136,7 @@ func _build_controls_panel() -> void:
 		["Maus", "Umschauen (Klick ins Fenster fängt die Maus)"],
 		[_key_name("dash", "Shift"), "DASH: kurzer Spurt, ca. 3,6 m in Laufrichtung (ohne Eingabe geradeaus). Geht durch normale Geister hindurch und frisst verängstigte."],
 		[_key_name("turn_around", "Q"), "KEHRTWENDE: dreht die Ansicht sofort um 180°, danach kurze Pause."],
+		[_key_name("map_peek", "M"), "KARTE: zeigt im Speedrun und im Versus %d Sekunden lang das ganze Labyrinth, danach %d Sekunden Wartezeit. Der Chip KARTE zählt sie herunter." % [int(LevelsScript.MAP_PEEK_S), int(LevelsScript.MAP_PEEK_COOLDOWN_S)]],
 		["Esc", "Pause, Menü, Einstellungen"],
 	]
 	for r in rows:
@@ -1068,7 +1155,7 @@ func _build_controls_panel() -> void:
 	box.add_child(_subtitle_label("DASH-LADUNGEN", 16))
 	box.add_child(_subtitle_label("Du startest jedes Level mit 1 Ladung, mehr als 2 gehen nicht. Eine neue Ladung gibt es nur, wenn du einen verängstigten Geist frisst oder die Frucht erwischst, nie über die Zeit. Steht eine Wand direkt davor, startet der Dash nicht und kostet nichts. Der Chip DASH oben links zeigt die Ladungen."))
 	box.add_child(_subtitle_label("SPEEDRUN", 16))
-	box.add_child(_subtitle_label("Die Zeit läuft bis zur letzten Kugel. Dash und Kehrtwende gelten in allen Speedrun-Leveln für alle gleich. In den Explorer-Städten gibt es nur die Kehrtwende. Die Karte zeigt im Speedrun nur die Umgebung (lokal), dazu gibt es oben einen Kompass. Mit diesen Regeln (Regelversion 3) starten die Bestenlisten neu, frühere Zeiten bleiben im Archiv der Spieldatei erhalten. Zum Üben gibt es TRAINING mit voller Karte, das nichts wertet."))
+	box.add_child(_subtitle_label("Die Zeit läuft bis zur letzten Kugel. Die Karte zeigt nur die Umgebung, darunter hängt der Kompass; mit KARTE siehst du kurz alles. Dash, Kehrtwende und KARTE gelten für alle gleich. Frühere Zeiten mit anderen Regeln bleiben gesichert, zählen aber nicht mehr. Zum Üben: TRAINING mit voller Karte, wertet nichts."))
 	box.add_child(_subtitle_label("KOMFORT", 16))
 	box.add_child(_subtitle_label("Sichtfeld, Mausempfindlichkeit und „Effekte reduzieren“ stehen oben im Startbildschirm und im Pausemenü."))
 	var back := _make_button("ZURÜCK  (Esc)")
@@ -1437,25 +1524,27 @@ func _build_clock_hint() -> void:
 ## Compass strip (ZAP-6): shown in the Lokal and Aus map modes. Pure readout
 ## of the player's own heading — the camera is never touched. N = maze up
 ## (the minimap's up), O = east. Bearing = -yaw (see _minimap_arrow).
-const COMPASS_W := 280.0
-const COMPASS_H := 30.0
-const COMPASS_FOV := PI * 0.9 # visible span of the strip, radians
+const COMPASS_W := 150.0 # as wide as the minimap it hangs under
+const COMPASS_H := 26.0
+const COMPASS_FOV := PI * 0.56 # visible span of the strip (~100 deg), radians
 const COMPASS_MARKS := [["N", 0.0], ["NO", 0.7853982], ["O", 1.5707963], ["SO", 2.3561945], ["S", 3.1415927], ["SW", 3.9269908], ["W", 4.712389], ["NW", 5.4977871]]
 
 
 func _build_compass() -> void:
 	compass = Control.new()
 	compass.name = "Compass"
-	compass.set_anchors_preset(Control.PRESET_CENTER_TOP)
-	compass.offset_left = -COMPASS_W * 0.5
-	compass.offset_right = COMPASS_W * 0.5
-	compass.offset_top = 8
-	compass.offset_bottom = 8 + COMPASS_H
+	# UX-K2 (10.10.): under the minimap, top right, instead of the top centre
+	# (where it collided with ENERGIE, the race bar, the card and the splits).
+	compass.set_anchors_preset(Control.PRESET_TOP_RIGHT)
+	compass.offset_left = minimap.offset_left
+	compass.offset_right = minimap.offset_right
+	compass.offset_top = minimap.offset_bottom + 6
+	compass.offset_bottom = minimap.offset_bottom + 6 + COMPASS_H
 	compass.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	compass.clip_contents = true
 	compass.visible = false
 	compass.draw.connect(_draw_compass)
-	add_child(compass)
+	game_hud.add_child(compass)
 
 
 func compass_bearing() -> float:
@@ -1477,9 +1566,11 @@ func _draw_compass() -> void:
 		var col := ACCENT if m[0] == "N" else RABBIT_WHITE
 		if not cardinal:
 			col = Color(RABBIT_WHITE, 0.55)
-		var fs := 19 if cardinal else 13
+		var fs := 17 if cardinal else 12
 		var tw := font.get_string_size(m[0], HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x
-		compass.draw_string(font, Vector2(x - tw * 0.5, COMPASS_H - 8.0), m[0], HORIZONTAL_ALIGNMENT_LEFT, -1, fs, col)
+		if x - tw * 0.5 < 2.0 or x + tw * 0.5 > COMPASS_W - 2.0:
+			continue # half a label at the edge reads as noise (UX-N1)
+		compass.draw_string(font, Vector2(x - tw * 0.5, COMPASS_H - 7.0), m[0], HORIZONTAL_ALIGNMENT_LEFT, -1, fs, col)
 	compass.draw_line(Vector2(COMPASS_W * 0.5, 0), Vector2(COMPASS_W * 0.5, 5), PELLET_COLOR, 2.0)
 	compass.draw_rect(Rect2(0, 0, COMPASS_W, COMPASS_H), Color(ACCENT, 0.35), false, 1.0)
 
@@ -1489,14 +1580,11 @@ func _draw_compass() -> void:
 func _build_split_box() -> void:
 	split_box = Control.new()
 	split_box.name = "SplitBox"
-	split_box.set_anchors_preset(Control.PRESET_CENTER_TOP)
-	split_box.offset_top = 88
-	split_box.offset_bottom = 122
-	split_box.offset_left = -170
-	split_box.offset_right = 170
+	split_box.custom_minimum_size = Vector2(340, 34)
+	split_box.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 	split_box.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	split_box.visible = false
-	add_child(split_box)
+	top_stack.add_child(split_box)
 	var panel := PanelContainer.new()
 	var sb := _panel_style()
 	sb.bg_color = Color(0.0, 0.0, 0.0, 0.7)
@@ -1615,6 +1703,7 @@ func hint_text() -> String:
 
 
 func _process(delta: float) -> void:
+	_place_top_stack()
 	var paused_now := pause_panel != null and pause_panel.visible
 	if _hint_left > 0.0:
 		if not paused_now:
@@ -1668,14 +1757,12 @@ func set_flip_frame(alpha: float) -> void:
 ## power bar, top center.
 func _build_condition_card() -> void:
 	condition_card = PanelContainer.new()
-	condition_card.set_anchors_preset(Control.PRESET_CENTER_TOP)
-	condition_card.grow_horizontal = Control.GROW_DIRECTION_BOTH
-	condition_card.offset_left = -190
-	condition_card.offset_right = 190
-	condition_card.offset_top = 56
+	condition_card.name = "ConditionCard"
+	condition_card.custom_minimum_size = Vector2(380, 0)
+	condition_card.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 	condition_card.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	condition_card.visible = false
-	add_child(condition_card)
+	top_stack.add_child(condition_card)
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 12)
 	condition_card.add_child(row)
@@ -2041,7 +2128,8 @@ func _draw_minimap() -> void:
 	var pellet_rim: Color = ct.minimap_pellet_outline if ct != null else Color(0, 0, 0, 0)
 	# Lokal (ZAP-6): the same drawing, magnified so that LOCAL_RADIUS cells
 	# around the player fill the box (not rotating; clipped to the box).
-	var local := effective_map_mode() == SettingsScript.MAP_LOCAL and minimap_player != null
+	var peek := _map_peek and effective_map_mode() == SettingsScript.MAP_LOCAL
+	var local := effective_map_mode() == SettingsScript.MAP_LOCAL and minimap_player != null and not peek
 	minimap.clip_contents = local
 	if local:
 		var z: float = float(minimap_maze.cols) / float(2 * LOCAL_RADIUS + 1)
@@ -2055,6 +2143,11 @@ func _draw_minimap() -> void:
 			if not minimap_maze_view.pellet_alive[i]:
 				continue
 			var pc: Vector2i = minimap_maze_view.pellet_cells[i]
+			if peek:
+				# KARTE: 2 s to find the last pellets - larger, with a dark rim (GD-W1/UX-W1)
+				minimap.draw_circle(Vector2((pc.y + 0.5) * sx, (pc.x + 0.5) * sy), 2.6, Color(0, 0, 0))
+				minimap.draw_circle(Vector2((pc.y + 0.5) * sx, (pc.x + 0.5) * sy), 1.8, pellet_col)
+				continue
 			if pellet_rim.a > 0.0: # Arles: a dark ring keeps the pellets readable
 				minimap.draw_circle(Vector2((pc.y + 0.5) * sx, (pc.x + 0.5) * sy), 1.6, pellet_rim)
 			minimap.draw_circle(Vector2((pc.y + 0.5) * sx, (pc.x + 0.5) * sy), 0.9, pellet_col)
@@ -2091,7 +2184,15 @@ func _draw_minimap() -> void:
 	if minimap_player != null:
 		var yaw: float = minimap_player.yaw if "yaw" in minimap_player else 0.0
 		var arrow := _minimap_arrow(Vector2((minimap_player.global_position.x / 2.0 + 0.5) * sx, (minimap_player.global_position.z / 2.0 + 0.5) * sy), yaw)
-		if _explorer_hud:
+		if peek:
+			# KARTE: find yourself at once - a static cream ring plus a dark rim
+			var pc0: Vector2 = (arrow[0] + arrow[1] + arrow[2]) / 3.0
+			minimap.draw_arc(pc0, 7.0, 0.0, TAU, 24, Color(0, 0, 0), 3.0, true)
+			minimap.draw_arc(pc0, 7.0, 0.0, TAU, 24, pellet_col, 1.6, true)
+			for rim in Geometry2D.offset_polygon(arrow, 1.5, Geometry2D.JOIN_MITER):
+				minimap.draw_colored_polygon(rim, Color(0, 0, 0))
+			minimap.draw_colored_polygon(arrow, ACCENT)
+		elif _explorer_hud:
 			# explorer cities: white arrow, 1.5 px black rim (cyan stays for text and frames)
 			for rim in Geometry2D.offset_polygon(arrow, 1.5, Geometry2D.JOIN_MITER):
 				minimap.draw_colored_polygon(rim, Color(0, 0, 0))

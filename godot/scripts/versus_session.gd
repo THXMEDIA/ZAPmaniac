@@ -60,7 +60,9 @@ signal rematch_requested
 ## The opponent is gone. `during_match`: a match was running (not finished).
 signal opponent_left(during_match: bool)
 
-const PROTOCOL := 2
+## 3: "hello" carries the rules version (Levels.RULES_VERSION); both sides
+## must have the same one, otherwise the match does not start.
+const PROTOCOL := 3
 const DEFAULT_PORT := 47823
 const ROUNDS_TO_WIN := 2 # best of three
 const MATCH_LEVELS := 3
@@ -316,7 +318,8 @@ func _send_hello() -> void:
 		return
 	_hello_sent = true
 	_send({"t": "hello", "v": PROTOCOL, "name": my_name, "channel": my_channel,
-		"commit": ChatDuelScript.commit(_secret), "week": [my_week.x, my_week.y]})
+		"commit": ChatDuelScript.commit(_secret), "week": [my_week.x, my_week.y],
+		"rules": LevelsScript.RULES_VERSION})
 
 
 ## ---- protocol ------------------------------------------------------------
@@ -331,6 +334,11 @@ func _on_message(m: Dictionary) -> void:
 			if int(_num(m.get("v"), 0, 1000, 0)) != PROTOCOL:
 				_send({"t": "bye", "why": "version"})
 				_fail("Andere Spielversion beim Gegner (Protokoll %d) – bitte beide aktualisieren." % PROTOCOL)
+				return
+			var opp_rules := int(_num(m.get("rules"), 0, 1000, 0))
+			if opp_rules != LevelsScript.RULES_VERSION:
+				_send({"t": "bye", "why": "rules"})
+				_fail("Andere Regelversion beim Gegner (%d statt %d) – bitte beide aktualisieren." % [opp_rules, LevelsScript.RULES_VERSION])
 				return
 			_hello_got = true
 			opp_name = clean_name(str(m.get("name", "")))
@@ -430,6 +438,8 @@ func _on_message(m: Dictionary) -> void:
 				_opponent_gone()
 				if why == "version":
 					_set_state(State.CLOSED, "Der Gegner hat eine andere Spielversion – bitte beide aktualisieren.")
+				elif why == "rules":
+					_set_state(State.CLOSED, "Der Gegner spielt mit einer anderen Regelversion – bitte beide aktualisieren.")
 				elif why == "handshake":
 					_set_state(State.CLOSED, "Verbindung fehlerhaft – bitte neu verbinden.")
 

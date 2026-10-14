@@ -44,7 +44,7 @@ Ein gemeinsamer Wand-/Boden-Shader (aus `konditionen.patch`) mit Uniforms `look`
 
 ### 2.2 Das Kaninchen
 - Genau 1 White-Rabbit-Pickup pro Speedrun-Level, ab Level 1. Ersetzt Word-Mode-Pickup, Fear-&-Loathing-Pickup und die Konditionswahl am Startscreen (diese entfallen; Manhattan behält seine permanente Wort-Welt).
-- Position: deterministisch je Level-Seed in einer Sackgasse, BFS-Distanz zum Start ≥ 40 % des Maximums; die Zelle bleibt frei von Pflicht-Kugeln (keine Kugel wird durch das Kaninchen ersetzt). Ab Levelstart auf der Minimap sichtbar.
+- Position: deterministisch je Level-Seed in einer Sackgasse, BFS-Distanz zum Start ≥ 40 % des Maximums; die Zelle bleibt frei von Pflicht-Kugeln (keine Kugel wird durch das Kaninchen ersetzt). Auf der Minimap sichtbar, sobald sie es zeigt: im Speedrun und Versus über KARTE (Taste M, 2 s volle Karte, seit Regelversion 4) oder in der lokalen Karte in der Nähe, im Training dauerhaft.
 - Freiwillig: Wer es liegen lässt, spielt einen voll deterministischen Lauf.
 - Figur (UX-W3): sitzendes Voxel-Kaninchen in Hasenweiß (Körper, Kopf, zwei lange Ohren, Schwanz, dunkle Augen), schwebt knapp über dem Boden, dreht sich langsam (0,24 Hz), schwacher Lichtkegel am Boden. Minimap: kleines Ohren-Symbol.
 - Aufnahme: sofortige Titelkarte oben (Symbol, Name; zweite Zeile mit Manipulation/Wirkung 15 px weiß; Chat-Zeile 12 px; rechts „GUT ▲“/„SCHLECHT ▼“ und Restsekunden „7 s“; Restzeit-Balken, der in den letzten 3 s mit 1 Hz pulsiert; Farbe gut = Grün, schlecht = Magenta), eigener Ton (gut aufsteigend, schlecht verstimmt fallend), Musikschicht für die Dauer.

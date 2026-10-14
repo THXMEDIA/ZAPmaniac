@@ -20,12 +20,21 @@ const SAVE_FILE := "zapmaniac_speedrun.json"
 ##      level, 06.10.2026). Times set without them are not comparable, so on
 ##      the first load every best time of an older file moves to the archive
 ##      under "<key>|regel1" (kept, never shown). Everything else as in 3.
-const SAVE_VERSION := 5
+##   5: rules version 3 (local map, 08.10.2026): best times of a version-4
+##      file move to the archive under "<key>|regel2".
+##   6: rules version 4 (KARTE: full map for 2 s on a key, 14.10.2026): best
+##      times of a version-5 file move to the archive under "<key>|regel3".
+##      Before an older file is migrated, it is copied to
+##      "<name>.v<version>.bak" (SavePaths.backup_before_migration).
+const SAVE_VERSION := 6
 ## Suffix of archived boards from before the Bewegungs-Paket (rules version 1).
 const RULES1_SUFFIX := "|regel1"
 ## Rules version 3 (Speedrun with the local map only): runs of a version-4
 ## file (Dash + Kehrtwende, full map) are archived with this suffix.
 const RULES2_SUFFIX := "|regel2"
+## Rules version 4 (KARTE key): runs of a version-5 file (local map only) are
+## archived with this suffix.
+const RULES3_SUFFIX := "|regel3"
 ## Zwischenzeiten: at these shares of the pellets eaten the HUD compares the
 ## current time with the best run's (docs/design/bewegungspaket.md, ZAP-8).
 const SPLIT_MARKS := [0.25, 0.5, 0.75]
@@ -217,6 +226,8 @@ func _load() -> void:
 		_read_only = true
 		return
 	loaded_version = version
+	if version < SAVE_VERSION:
+		SavePathsScript.backup_before_migration(path, version)
 	var raw_times = parsed.get("best_times", {})
 	if typeof(raw_times) == TYPE_DICTIONARY:
 		var migrated := migrate_best_times(raw_times, version)
@@ -351,9 +362,10 @@ static func migrate_best_times(raw: Dictionary, version: int) -> Dictionary:
 			if not arch.has(ak) or t < float(arch[ak]):
 				arch[ak] = t
 		out = {}
-	elif version < 5:
+	elif version < 6:
+		var suffix: String = RULES2_SUFFIX if version < 5 else RULES3_SUFFIX
 		for k in out.keys():
-			var ak2: String = str(k) + RULES2_SUFFIX
+			var ak2: String = str(k) + suffix
 			var t2: float = float(out[k].time)
 			if not arch.has(ak2) or t2 < float(arch[ak2]):
 				arch[ak2] = t2

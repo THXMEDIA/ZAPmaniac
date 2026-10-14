@@ -316,16 +316,38 @@ func _initialize() -> void:
 		print("FAIL a v4 file should be archived as |regel2 (old archive kept): %s / %s" % [v4a.best_times, v4a.archive])
 	v4a.free()
 
-	# a v5 file keeps its live boards (the current rules' times count)
-	_write(SAVE_PATH, JSON.stringify({"version": 5, "best_times": {
+	# Rules version 4 (KARTE): the best times of a v5 file (local map without
+	# the key) are archived as |regel3; the file is copied to .v5.bak first.
+	var v5_text := JSON.stringify({"version": 5, "best_times": {
+		"klassik-1|woche|solo": {"time": 77.0, "week": "2026-W41"},
+	}, "archive": {"klassik-1|woche|solo" + rsuf: 99.0}})
+	_write(SAVE_PATH, v5_text)
+	for bv in range(1, 6):
+		DirAccess.remove_absolute(SAVE_PATH + ".v%d.bak" % bv)
+	var v5a = speedrun_script.new()
+	v5a.reload()
+	checks += 1
+	if v5a.best_for("klassik-1") != -1.0 or v5a.archive.get("klassik-1|woche|solo" + speedrun_script.RULES3_SUFFIX) != 77.0 or v5a.archive.get("klassik-1|woche|solo" + rsuf) != 99.0:
+		failures += 1
+		print("FAIL a v5 file should be archived as |regel3 (old archive kept): %s / %s" % [v5a.best_times, v5a.archive])
+	checks += 1
+	if not FileAccess.file_exists(SAVE_PATH + ".v5.bak") or FileAccess.get_file_as_string(SAVE_PATH + ".v5.bak") != v5_text:
+		failures += 1
+		print("FAIL a v5 file should be copied to .v5.bak before the migration")
+	v5a.free()
+	for bv in range(1, 6):
+		DirAccess.remove_absolute(SAVE_PATH + ".v%d.bak" % bv)
+
+	# a v6 file keeps its live boards (the current rules' times count)
+	_write(SAVE_PATH, JSON.stringify({"version": 6, "best_times": {
 		"klassik-1|woche|solo": {"time": 88.0, "week": "2026-W41"},
 	}, "archive": {"klassik-1|woche|solo" + rsuf: 99.0}}))
 	var v4 = speedrun_script.new()
 	v4.reload()
 	checks += 1
-	if v4.best_for("klassik-1") != 88.0 or v4.archive.get("klassik-1|woche|solo" + rsuf) != 99.0 or v4.loaded_version != 5:
+	if v4.best_for("klassik-1") != 88.0 or v4.archive.get("klassik-1|woche|solo" + rsuf) != 99.0 or v4.loaded_version != 6:
 		failures += 1
-		print("FAIL a v5 file keeps live boards and its archive: %s / %s" % [v4.best_times, v4.archive])
+		print("FAIL a v6 file keeps live boards and its archive: %s / %s" % [v4.best_times, v4.archive])
 	v4.free()
 
 	# --- Code-W3: version field and type checks ---------------------------

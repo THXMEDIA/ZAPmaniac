@@ -200,6 +200,10 @@ var _chat_hud_next_update := 0.0
 ## shows 0:00.00 and walking is locked while the intro is up. next_level()
 ## does not hold (no intro between levels).
 var start_hold := false
+## KARTE (rules version 4): game time (`now`) until the full map closes and
+## until the key works again.
+var map_peek_until := -1.0
+var map_peek_ready_at := 0.0
 var intro_until_real := 0.0
 ## Tests / tools: start a speedrun without the intro and the hold (the clock
 ## then starts with the level, like next_level).
@@ -523,6 +527,7 @@ func start_level(level: Dictionary) -> void:
 	# Map by run type: Training = Voll, timed runs (Speedrun, Versus) = Lokal.
 	hud.set_map_mode(SettingsScript.MAP_FULL if training_mode else SettingsScript.MAP_LOCAL)
 	hud.set_minimap_visible(true)
+	_reset_map_peek()
 	hud.set_game_hud_visible(true)
 	_apply_theme_environment("normal")
 	_style_outline = false
@@ -1532,6 +1537,11 @@ func toggle_pause() -> void:
 	var in_versus: bool = versus != null and versus.active
 	hud.set_versus_pause(in_versus)
 	if paused:
+		# KARTE closes with the pause (game time stands, the minimap stays
+		# visible beside the panel); the wait is not shortened by pausing.
+		if now < map_peek_until:
+			map_peek_until = now
+			_update_map_peek_hud()
 		if in_versus:
 			versus.on_paused(true) # countdown digit off while the menu is up (QA W4)
 		# QA 03.10. W1: the start intro must never cover the pause menu. Pausing
@@ -1563,9 +1573,10 @@ func toggle_pause() -> void:
 ## ---------------- main loop ----------------
 
 ## Registers the Bewegungs-Paket keys in code (project.godot stays untouched,
-## Godot rewrites it on every editor start): Shift = Dash, Q = Kehrtwende.
+## Godot rewrites it on every editor start): Shift = Dash, Q = Kehrtwende,
+## M = KARTE (rules version 4).
 func _register_move_actions() -> void:
-	for pair in [["dash", KEY_SHIFT], ["turn_around", KEY_Q]]:
+	for pair in [["dash", KEY_SHIFT], ["turn_around", KEY_Q], ["map_peek", KEY_M]]:
 		if InputMap.has_action(pair[0]):
 			continue
 		InputMap.add_action(pair[0])
@@ -1587,6 +1598,42 @@ func _handle_move_keys(event: InputEvent) -> void:
 			Sfx.dash()
 		elif player.dash_charges <= 0 and player.dash_cooldown_left <= 0.0:
 			Sfx.dash_empty()
+	elif event.is_action_pressed("map_peek"):
+		if not try_map_peek() and not playing_explorer and hud.map_chip.visible:
+			Sfx.dash_empty() # the same "not now" as an empty Dash (UX-W3)
+			hud.flash_map_chip()
+
+
+## KARTE (rules version 4): in a timed run with the local map, the key shows
+## the whole maze for Levels.MAP_PEEK_S, then waits MAP_PEEK_COOLDOWN_S.
+## Not in the start hold (the clock has not started yet), not while the
+## minimap is off (Stromausfall), not in Training / Explorer (full map anyway).
+## Both timers run on game time (`now`), like the other effect timers.
+func map_peek_available() -> bool:
+	return running and not paused and not start_hold and not playing_explorer \
+		and hud.effective_map_mode() == SettingsScript.MAP_LOCAL and hud.minimap.visible \
+		and now >= map_peek_ready_at
+
+
+func try_map_peek() -> bool:
+	if not map_peek_available():
+		return false
+	map_peek_until = now + LevelsScript.MAP_PEEK_S
+	map_peek_ready_at = map_peek_until + LevelsScript.MAP_PEEK_COOLDOWN_S
+	_update_map_peek_hud()
+	return true
+
+
+func _reset_map_peek() -> void:
+	map_peek_until = -1.0
+	map_peek_ready_at = 0.0
+	_update_map_peek_hud()
+
+
+func _update_map_peek_hud() -> void:
+	var open: bool = now < map_peek_until and hud.minimap.visible
+	var wait: float = maxf(map_peek_ready_at - now, 0.0) if not open else 0.0
+	hud.set_map_peek(open, wait, not start_hold)
 
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -1627,6 +1674,8 @@ func _process(delta: float) -> void:
 	if not (running and not paused) or start_hold:
 		if running and maze != null:
 			hud.update_minimap(maze, player, enemies, now < frightened_until, maze_view)
+			if start_hold:
+				_update_map_peek_hud() # chip dimmed until the clock runs
 		return
 	now += delta
 
@@ -1684,6 +1733,7 @@ func _process(delta: float) -> void:
 	hud.set_minimap_visible(active_condition == null or active_condition.minimap_visible())
 	hud.update_minimap(maze, player, enemies, frightened_active, maze_view)
 	hud.set_dash(player.dash_charges, player.DASH_MAX_CHARGES, player.dash_cooldown_left <= 0.0)
+	_update_map_peek_hud()
 
 
 func _check_enemy_collision(enemy, frightened_active: bool) -> void:

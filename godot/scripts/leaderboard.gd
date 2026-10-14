@@ -38,10 +38,14 @@ const SAVE_FILE := "zapmaniac_leaderboards.json"
 ##   4: rules version 2 (Bewegungs-Paket: Dash + Kehrtwende, 06.10.2026): on
 ##      the first load every board of an older file moves to the archive under
 ##      "<key>|regel1" (kept, never shown), the boards start fresh.
-const SAVE_VERSION := 5
+##   5: rules version 3 (local map): boards of a version-4 file -> "|regel2".
+##   6: rules version 4 (KARTE key, 14.10.2026): boards of a version-5 file
+##      -> "|regel3". Older files are copied to "<name>.v<version>.bak" first.
+const SAVE_VERSION := 6
 ## Suffix of archived boards from before the Bewegungs-Paket (rules version 1).
 const RULES1_SUFFIX := "|regel1"
 const RULES2_SUFFIX := "|regel2" # version-4 file: Dash + Kehrtwende, but full map
+const RULES3_SUFFIX := "|regel3" # version-5 file: local map without the KARTE key
 ## Entry `cond` values besides a Conditions id (see the version history).
 const COND_NONE := ""
 const COND_UNKNOWN := "?"
@@ -168,6 +172,8 @@ func _load() -> void:
 		_read_only = true
 		return
 	loaded_version = version
+	if version < SAVE_VERSION:
+		SavePathsScript.backup_before_migration(path, version)
 	var broken := false
 	var raw_boards = parsed
 	if version >= 2:
@@ -188,6 +194,8 @@ func _load() -> void:
 			_put(archive, new_key + RULES1_SUFFIX, board) # run without Dash/Kehrtwende: not comparable
 		elif version < 5:
 			_put(archive, new_key + RULES2_SUFFIX, board) # run with the full map: not comparable
+		elif version < 6:
+			_put(archive, new_key + RULES3_SUFFIX, board) # local map without KARTE: not comparable
 		else:
 			_put(_boards, new_key, board)
 	var raw_archive = parsed.get("archive", {}) if version >= 3 else {}

@@ -119,6 +119,22 @@ static func backup_corrupt(file_path: String) -> String:
 	return dest
 
 
+## Before a save of an older `version` is migrated (and its boards archived),
+## the original is kept once as "<name>.v<version>.bak". An existing backup
+## of the same version is never overwritten. Returns the backup path ("" if
+## there was nothing to copy, it already existed or the copy failed).
+static func backup_before_migration(file_path: String, version: int) -> String:
+	if not FileAccess.file_exists(file_path):
+		return ""
+	var dest := "%s.v%d.bak" % [file_path, version]
+	if FileAccess.file_exists(dest):
+		return ""
+	if DirAccess.copy_absolute(file_path, dest) != OK:
+		push_warning("SavePaths: could not back up %s before the migration" % file_path)
+		return ""
+	return dest
+
+
 ## Backups made by backup_corrupt for `file_path` (tests).
 static func corrupt_backups(file_path: String) -> Array:
 	var out := []

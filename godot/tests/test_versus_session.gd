@@ -273,6 +273,20 @@ func _run() -> void:
 	_check("join with a malformed address is refused at once", lonely.join("not an ip", port) != OK and lonely.state == Session.State.IDLE)
 
 	_check("levels_for is deterministic", Session.levels_for(123) == Session.levels_for(123))
+
+	# --- rules version in the handshake (PROTOCOL 3, rules version 4) ---------
+	_check("protocol 3 carries the rules version", Session.PROTOCOL == 3 and Levels.RULES_VERSION == 4)
+	var strict = Session.new()
+	root.add_child(strict)
+	var texts := []
+	strict.state_changed.connect(func(_s, t): texts.append(t))
+	strict.state = Session.State.HANDSHAKE
+	strict._on_message({"t": "hello", "v": Session.PROTOCOL, "name": "Old", "channel": "", "commit": "c", "week": [2026, 41], "rules": 3})
+	_check("a hello with another rules version is refused", strict.state == Session.State.IDLE and not strict._hello_got and texts.size() > 0 and String(texts[-1]).contains("Regelversion"), str(texts))
+	strict.state = Session.State.HANDSHAKE
+	strict._on_message({"t": "hello", "v": Session.PROTOCOL, "name": "NoRules", "channel": "", "commit": "c", "week": [2026, 41]})
+	_check("a hello without a rules version is refused", strict.state == Session.State.IDLE and not strict._hello_got)
+	strict.queue_free()
 	await _frames(2)
 	if failures == 0:
 		print("test_versus_session: all %d checks passed" % checks)
