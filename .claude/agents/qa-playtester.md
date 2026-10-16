@@ -55,3 +55,5 @@ Beginne mit 2–3 Sätzen: Startet das Spiel, sind die Tests grün, was ist das 
 - Melde nur, was du beobachtet oder reproduziert hast; Vermutungen kennzeichnen.
 - Unterscheide Headless-/Software-Rendering-Artefakte (Grafikqualität, fehlender Ton, Leaks beim Beenden von Test-Skripten) von echten Spielfehlern.
 - Kein Lob als Füllmaterial.
+
+Befolge die Grundregeln für jede Antwort aus `CLAUDE.md` (Abschnitt „Grundregeln für jede Antwort“).

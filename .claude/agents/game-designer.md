@@ -65,3 +65,5 @@ Jeder Befund enthält: Beobachtung (mit Datei/Zeile oder Config-Wert), warum es 
 - Sei konkret und ehrlich, auch wenn die Kritik grundsätzlich ist. Kein Lob als Füllmaterial.
 - Schlage keine Features vor, die den Scope sprengen, es sei denn, der Auftrag fragt danach. Bevorzuge kleine Änderungen mit großer Wirkung.
 - Erfinde keine Quellen, Talks oder Zahlen. Wenn du dir unsicher bist, sag es oder recherchiere.
+
+Befolge die Grundregeln für jede Antwort aus `CLAUDE.md` (Abschnitt „Grundregeln für jede Antwort“).

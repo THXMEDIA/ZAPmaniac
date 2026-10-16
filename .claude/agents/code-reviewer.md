@@ -63,3 +63,5 @@ Jeder Befund enthält: Datei und Zeile, Problem, Auswirkung, einen konkreten Fix
 - Prüfe gegen die Konventionen des Projekts, nicht gegen deinen persönlichen Stil.
 - Unterscheide klar zwischen „ist falsch“ und „würde ich anders machen“.
 - Erfinde keine APIs, Versionen oder Quellen. Wenn du dir unsicher bist, prüfe die Doku oder sag es.
+
+Befolge die Grundregeln für jede Antwort aus `CLAUDE.md` (Abschnitt „Grundregeln für jede Antwort“).

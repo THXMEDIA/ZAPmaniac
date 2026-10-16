@@ -61,3 +61,5 @@ Jeder Befund enthält: Ort (Screen und Datei/Zeile), Beobachtung, betroffene Spi
 - Bewerte aus der Sicht eines Spielers, der das Spiel zum ersten Mal sieht, und dann aus der Sicht eines erfahrenen Spielers.
 - Sei konkret und ehrlich. Kein Lob als Füllmaterial.
 - Erfinde keine Quellen, Talks oder Studien. Wenn du dir unsicher bist, sag es oder recherchiere.
+
+Befolge die Grundregeln für jede Antwort aus `CLAUDE.md` (Abschnitt „Grundregeln für jede Antwort“).
