@@ -2414,60 +2414,91 @@ func _run_feedback_1016_checks() -> void:
 	# Schwung: off by default, no effect
 	_check("schwung: off by default, no speed change", not pl.flow_enabled and is_equal_approx(pl.flow_speed_factor(), 1.0) and not main.hud.flow_chip.visible)
 	pl.on_pellet()
-	_check("schwung: pellets do nothing while it is off", is_equal_approx(pl.flow, 0.0))
+	_check("schwung: pellets do nothing while it is off", pl.gear == 0 and pl.chain == 0)
 	main.toggle_flow_spike()
 	main._process(0.016)
-	_check("schwung: F7 switches it on, the HUD chip shows", pl.flow_enabled and main.hud.flow_chip.visible)
+	_check("schwung: F7 switches it on, chip and gear bar show", pl.flow_enabled and main.hud.flow_chip.visible and main.hud.gear_bar.visible)
+	_check("schwung: switching it on during a level marks the level as test", main.level_flow_used and main.hud.board_label.text.begins_with("TEST"))
+	var gears: Array = []
+	pl.gear_changed.connect(func(g, up): gears.append([g, up]))
 	for i in 3:
 		pl.on_pellet()
-	_check("schwung: three pellets in a row = 36 %% flow, +9 %% speed", is_equal_approx(pl.flow, 0.36) and is_equal_approx(pl.flow_speed_factor(), 1.09), str(pl.flow))
-	pl._update_flow(0.5, true)
-	_check("schwung: it holds right after a pellet", is_equal_approx(pl.flow, 0.36))
-	pl._update_flow(0.5, true)
-	_check("schwung: then it drains", pl.flow < 0.36 and pl.flow > 0.0, str(pl.flow))
-	for i in 20:
+	_check("schwung: three pellets = still gear 0", pl.gear == 0 and is_equal_approx(pl.flow_speed_factor(), 1.0))
+	pl.on_pellet()
+	_check("schwung: the 4th pellet in a row = gear 1, +10 %%, with a signal", pl.gear == 1 and is_equal_approx(pl.flow_speed_factor(), 1.10) and gears == [[1, true]])
+	for i in 8:
 		pl.on_pellet()
-	_check("schwung: capped at 100 %% (+25 %% speed)", is_equal_approx(pl.flow, 1.0) and is_equal_approx(pl.flow_speed_factor(), 1.25))
-	pl._update_flow(0.2, false)
-	_check("schwung: standing still drains it fast", pl.flow < 0.5, str(pl.flow))
-	# a head-on wall hit costs flow, walking along a corridor does not
+	_check("schwung: 12 in a row = gear 3, +25 %%", pl.gear == 3 and is_equal_approx(pl.flow_speed_factor(), 1.25) and is_equal_approx(pl.flow, 1.0))
+	pl._update_flow(1.0, true)
+	_check("schwung: it holds 1.1 s after the last pellet", pl.gear == 3)
+	pl._update_flow(0.5, true)
+	_check("schwung: then a gear drops every 0.8 s", pl.gear == 3)
+	pl._update_flow(0.5, true)
+	_check("schwung: ... gear 2 after the first drop, with a down signal", pl.gear == 2 and gears.back() == [2, false], str(pl.gear))
+	pl._update_flow(0.4, false)
+	_check("schwung: standing still drops a gear every 0.33 s", pl.gear == 1, str(pl.gear))
+	pl.turn_around()
+	_check("schwung: the Kehrtwende keeps the gear", pl.gear == 1)
+	# a real head-on wall hit costs a gear; grazing along a wall does not
 	var mz = main.maze
 	var wall_cell := Vector2i(-1, -1)
 	for c in MazeGen.cells_in_room(mz, false):
-		if mz.grid[c.x - 1][c.y] == 1 and mz.grid[c.x + 1][c.y] == 0:
+		if mz.grid[c.x - 1][c.y] == 1 and mz.grid[c.x + 1][c.y] == 0 and mz.grid[c.x][c.y - 1] == 0 and mz.grid[c.x][c.y + 1] == 0:
 			wall_cell = c
 			break
 	main.invuln_until = 1e9
 	for e in main.enemies:
 		e.release_at = 1e9
-	pl.global_position = Vector3(wall_cell.y * 2.0, pl.eye_h, wall_cell.x * 2.0)
-	pl.yaw = 0.0 # forward = -z = row - 1 = the wall
-	pl.rotation.y = 0.0
-	for i in 20:
-		pl.on_pellet()
+	var reset_to := func(): 
+		pl.global_position = Vector3(wall_cell.y * 2.0, pl.eye_h, wall_cell.x * 2.0)
+		pl.yaw = 0.0
+		pl.rotation.y = 0.0
+		pl.reset_flow()
+		for k in 12:
+			pl.on_pellet()
+	reset_to.call()
 	var hits0: int = pl.flow_wall_hits
-	pl.move_input = Vector2(0, 1)
+	pl.move_input = Vector2(1.0, 0.0) # strafing along the wall (east-west corridor)
+	for i in 30:
+		pl._flow_hold = 1.0
+		await get_tree().physics_frame
+	_check("schwung: walking along a wall is no hit", pl.flow_wall_hits == hits0 and pl.gear == 3, "hits %d gear %d" % [pl.flow_wall_hits - hits0, pl.gear])
+	reset_to.call()
+	pl.move_input = Vector2(0, 1) # forward = -z = row - 1 = the wall
 	for i in 40:
+		pl._flow_hold = 1.0
 		await get_tree().physics_frame
 	pl.move_input = Vector2.ZERO
-	_check("schwung: running head-on into a wall costs flow", pl.flow_wall_hits > hits0 and pl.flow < 0.6, "hits %d flow %.2f" % [pl.flow_wall_hits - hits0, pl.flow])
-	# a level with Schwung records nothing
+	_check("schwung: running head-on into a wall costs a gear (once per contact)", pl.flow_wall_hits > hits0 and pl.gear < 3, "hits %d gear %d" % [pl.flow_wall_hits - hits0, pl.gear])
+	# switching it off before the goal does not make the level count
+	main.toggle_flow_spike()
+	_check("schwung: off again, but the level stays a test level", not pl.flow_enabled and main.level_flow_used)
 	var top_before: int = Leaderboard.get_top("klassik-1", main.board_id(), 50, main.run_mode()).size()
 	main.level_start_real = main.real_now - 42.0
 	main.level_complete_sequence()
-	_check("schwung: a cleared level with Schwung goes on no board", Leaderboard.get_top("klassik-1", main.board_id(), 50, main.run_mode()).size() == top_before)
+	_check("schwung: a level that had Schwung goes on no board, even if switched off at the end", Leaderboard.get_top("klassik-1", main.board_id(), 50, main.run_mode()).size() == top_before)
 	main.begin_game("klassik-1")
 	await get_tree().process_frame
-	_check("schwung: a new level starts with no flow (still on)", pl.flow_enabled and is_equal_approx(pl.flow, 0.0))
+	_check("schwung: the next level (Schwung off) counts again", not main.level_flow_used)
 	main.toggle_flow_spike()
-	_check("schwung: F7 again switches it off", not pl.flow_enabled and is_equal_approx(pl.flow_speed_factor(), 1.0))
+	main.begin_game("klassik-1")
+	await get_tree().process_frame
+	_check("schwung: a level started with Schwung on is a test level from the start", main.level_flow_used and pl.flow_enabled and pl.gear == 0)
+	main.begin_explorer_game("tokyo")
+	await get_tree().process_frame
+	_check("schwung: the Explorer switches it off", not pl.flow_enabled and not main.hud.flow_chip.visible)
+	main.toggle_flow_spike()
+	_check("schwung: F7 does nothing in the Explorer", not pl.flow_enabled)
+	main.begin_game("klassik-1")
+	await get_tree().process_frame
 
 	# volumes
 	main.set_music_volume(0.3)
 	var mb := AudioServer.get_bus_index(Sfx.BUS_MUSIC)
-	_check("volume: the music slider sets the music bus", absf(AudioServer.get_bus_volume_db(mb) - linear_to_db(0.3)) < 0.01 and main.hud.music_sliders.all(func(sl): return is_equal_approx(sl.value, 0.3)))
+	_check("volume: the music slider sets the music bus (perceptual: 0.3 -> -21 dB)", absf(AudioServer.get_bus_volume_db(mb) - (-21.0)) < 0.01 and main.hud.music_sliders.all(func(sl): return is_equal_approx(sl.value, 0.3)))
+	_check("volume: the value label reads 30 %%", main.hud.music_value_labels.all(func(l): return l.text == "30 %"))
 	main.set_sfx_volume(0.0)
-	_check("volume: effects at 0 are muted", AudioServer.is_bus_mute(AudioServer.get_bus_index(Sfx.BUS_SFX)))
+	_check("volume: sounds at 0 are muted and read 'aus'", AudioServer.is_bus_mute(AudioServer.get_bus_index(Sfx.BUS_SFX)) and main.hud.sfx_value_labels.all(func(l): return l.text == "aus"))
 	main.set_music_volume(main.SettingsScript.MUSIC_VOL_DEFAULT)
 	main.set_sfx_volume(main.SettingsScript.SFX_VOL_DEFAULT)
 

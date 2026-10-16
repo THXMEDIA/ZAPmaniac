@@ -238,6 +238,8 @@ func _on_round_started(round: int, go_in: float) -> void:
 	# turns follow the match, not this machine (seeded before the level).
 	main.ai_rng.seed = hash("zapmaniac-ai|%d|%d" % [session.match_seed, round])
 	arena_mode = session.mode == SessionScript.MODE_ARENA
+	main.player.set_flow_enabled(false) # the Schwung spike never decides a round
+	hud.set_flow(0.0, false)
 	ui.race_mode_tag = "ARENA" if arena_mode else ""
 	hud.minimap_opponent_yaw = NAN
 	main.begin_game(session.current_level_id())

@@ -34,22 +34,31 @@ var camera: Camera3D
 ## eye_h above the floor. Toggled with F6 in debug builds to compare.
 var camera_planned := false
 
-## ---- Schwung (flow) spike, tester feedback 16.10. ----
-## Eating pellets in a row builds flow, flow adds up to FLOW_MAX_BONUS speed.
-## It holds FLOW_HOLD_S after the last pellet, then drains; running head-on
-## into a wall or standing still costs it. Only the walking speed changes —
-## camera and FOV never (red line E8e). Off unless `flow_enabled` (F7).
-const FLOW_GAIN := 0.12
-const FLOW_MAX_BONUS := 0.25
-const FLOW_HOLD_S := 0.7
-const FLOW_DECAY := 0.9 # per second after the hold
-const FLOW_IDLE_DECAY := 3.0 # per second while standing
-const FLOW_WALL_KEEP := 0.4 # share kept after a head-on wall hit
-const FLOW_WALL_HEADON := 0.5 # dot(normal, -direction) above this = head-on
+## ---- Schwung (flow) spike, tester feedback 16.10., reworked after review ----
+## Three gears instead of a smooth bar (a threshold you notice is game feel,
+## +3 % steps are not): 4 / 8 / 12 pellets in a row give +10 / +18 / +25 %
+## walking speed. The chain holds FLOW_HOLD_S after the last pellet, then one
+## gear drops every FLOW_DROP_S; standing still drops one every FLOW_IDLE_DROP_S;
+## a real head-on wall hit (the body is stopped, not grazing a corner) drops
+## one gear. The Kehrtwende (Q) keeps the gear — turning in front of a dead end
+## instead of running into it is the technique. Only the walking speed changes,
+## never camera or FOV (red line E8e). Off unless `flow_enabled` (F7).
+signal gear_changed(gear: int, up: bool)
+const FLOW_GEAR_BONUS := [0.0, 0.10, 0.18, 0.25]
+const FLOW_GEAR_AT := [0, 4, 8, 12]
+const FLOW_HOLD_S := 1.1
+const FLOW_DROP_S := 0.8
+const FLOW_IDLE_DROP_S := 0.33
+const FLOW_WALL_HEADON := 0.85 # dot(normal, -direction) above this = head-on
+const FLOW_WALL_STOP := 0.4 # ... and the real speed fell below 40 % of the wanted one
 const FLOW_WALL_COOLDOWN := 0.3
 var flow_enabled := false
+var gear := 0
+var chain := 0
+## 0..1: the current bonus against the maximum (HUD, tests).
 var flow := 0.0
 var _flow_hold := 0.0
+var _flow_drop_t := 0.0
 var _flow_wall_cd := 0.0
 ## Counter for tests.
 var flow_wall_hits := 0
@@ -198,45 +207,86 @@ func set_flow_enabled(on: bool) -> void:
 
 
 func reset_flow() -> void:
+	gear = 0
+	chain = 0
 	flow = 0.0
 	_flow_hold = 0.0
+	_flow_drop_t = 0.0
 	_flow_wall_cd = 0.0
+
+
+func _set_gear(g: int) -> void:
+	g = clampi(g, 0, FLOW_GEAR_BONUS.size() - 1)
+	if g == gear:
+		return
+	var up := g > gear
+	gear = g
+	flow = FLOW_GEAR_BONUS[gear] / FLOW_GEAR_BONUS[FLOW_GEAR_BONUS.size() - 1]
+	gear_changed.emit(gear, up)
+
+
+func _drop_gear() -> void:
+	if gear <= 0:
+		chain = 0
+		return
+	_set_gear(gear - 1)
+	chain = FLOW_GEAR_AT[gear]
 
 
 ## A pellet (or power pellet) was eaten.
 func on_pellet() -> void:
 	if not flow_enabled:
 		return
-	flow = minf(flow + FLOW_GAIN, 1.0)
+	chain += 1
 	_flow_hold = FLOW_HOLD_S
+	_flow_drop_t = 0.0
+	var g := 0
+	for k in FLOW_GEAR_AT.size():
+		if chain >= FLOW_GEAR_AT[k]:
+			g = k
+	if g > gear:
+		_set_gear(g)
 
 
 func flow_speed_factor() -> float:
-	return 1.0 + FLOW_MAX_BONUS * flow if flow_enabled else 1.0
+	return 1.0 + FLOW_GEAR_BONUS[gear] if flow_enabled else 1.0
 
 
 func _update_flow(delta: float, moving: bool) -> void:
 	_flow_wall_cd = maxf(_flow_wall_cd - delta, 0.0)
-	if not flow_enabled:
+	if not flow_enabled or (gear == 0 and chain == 0):
 		return
-	if not moving:
-		flow = maxf(flow - FLOW_IDLE_DECAY * delta, 0.0)
-		return
-	var drain_t := delta
-	if _flow_hold > 0.0:
-		drain_t = maxf(delta - _flow_hold, 0.0) # only the part after the hold drains
+	var t := delta
+	if moving and _flow_hold > 0.0:
+		t = maxf(delta - _flow_hold, 0.0) # only the time after the hold counts
 		_flow_hold = maxf(_flow_hold - delta, 0.0)
-	flow = maxf(flow - FLOW_DECAY * drain_t, 0.0)
+	if t <= 0.0:
+		return
+	_flow_hold = 0.0
+	_flow_drop_t += t
+	var step: float = FLOW_DROP_S if moving else FLOW_IDLE_DROP_S
+	while _flow_drop_t >= step and (gear > 0 or chain > 0):
+		_flow_drop_t -= step
+		_drop_gear()
 
 
-## After move_and_slide: a head-on hit (not a graze along a wall) costs flow.
-func _check_flow_wall(dir: Vector3) -> void:
-	if not flow_enabled or flow <= 0.0 or _flow_wall_cd > 0.0 or dir.length() < 0.1:
+## After move_and_slide: a head-on wall hit costs a gear. Head-on = the wall
+## faces the walking direction (dot > 0.85) AND the body was really stopped
+## (real speed < 40 % of the wanted one) — grazing the inner corner of a turn
+## is no hit (QA/code review 16.10.). Only walls count, never the Arena
+## opponent's body.
+func _check_flow_wall(dir: Vector3, wanted: float) -> void:
+	if not flow_enabled or gear <= 0 or _flow_wall_cd > 0.0 or dir.length() < 0.1:
+		return
+	if wanted < 0.1 or get_real_velocity().length() >= FLOW_WALL_STOP * wanted:
 		return
 	for i in get_slide_collision_count():
-		var n := get_slide_collision(i).get_normal()
-		if n.dot(-dir.normalized()) > FLOW_WALL_HEADON:
-			flow *= FLOW_WALL_KEEP
+		var c := get_slide_collision(i)
+		var col = c.get_collider()
+		if col is CollisionObject3D and (col.collision_layer & WALL_MASK) == 0:
+			continue # the opponent (layer 4), not a wall
+		if c.get_normal().dot(-dir.normalized()) > FLOW_WALL_HEADON:
+			_drop_gear()
 			_flow_wall_cd = FLOW_WALL_COOLDOWN
 			flow_wall_hits += 1
 			return
@@ -324,8 +374,9 @@ func _physics_process(delta: float) -> void:
 	_last_move_input = v
 	_update_flow(delta, v.length() > 0.1)
 	velocity = move_dir * move_speed * flow_speed_factor()
+	var wanted := velocity.length()
 	move_and_slide()
-	_check_flow_wall(move_dir)
+	_check_flow_wall(move_dir, wanted)
 
 
 ## True while the dash runs and for a moment after it: normal ghosts do not

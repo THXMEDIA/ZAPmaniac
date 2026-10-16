@@ -69,9 +69,10 @@ func _run() -> void:
 	main.toggle_camera_height_test()
 	main.paused = false
 	main.toggle_flow_spike()
-	for i in 6:
-		main.player.on_pellet()
-	main._process(0.016)
+	for i in 9:
+		main.player.on_pellet() # gear 2
+	main.hud.hide_hint()
+	main.hud.set_flow(main.player.flow, true)
 	await _frames(5)
 	await _shot("f4_schwung")
 	main.toggle_pause()

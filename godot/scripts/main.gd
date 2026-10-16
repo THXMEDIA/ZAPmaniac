@@ -168,6 +168,9 @@ var run_chat_assisted := false
 ## level start (woche or chaos) — switching Chaos mode mid-level changes
 ## nothing for the running level.
 var level_board := ""
+## Schwung spike: it was on at some moment of this level -> the level records
+## nothing (code/QA review 16.10.: switching it off before the goal is no way out).
+var level_flow_used := false
 ## The condition the rabbit gave in this level ("" = rabbit left alone);
 ## stored with the leaderboard entry (GD: Bestenliste-Metadatum).
 var level_condition_id := ""
@@ -460,6 +463,7 @@ func _build_player() -> void:
 	player.set_script(load("res://scripts/player_controller.gd"))
 	add_child(player)
 	player.input_enabled = false
+	player.gear_changed.connect(_on_gear_changed)
 
 
 ## UX-K1: field of view and mouse sensitivity from the settings. Set once by
@@ -575,6 +579,7 @@ func start_level(level: Dictionary) -> void:
 	# level's position/maze risked an unnecessary extra teleport right
 	# before warp_to overwrote it anyway.
 	player.reset_flow()
+	level_flow_used = player.flow_enabled
 	player.warp_to(start_cell, _facing_yaw_for_start(start_cell)) # GD-W10: look down the longest open corridor instead of a fixed direction
 	player.reset_dash()
 	_refresh_noclip()
@@ -656,15 +661,33 @@ func begin_game(forced_level_id: String = "", training: bool = false) -> void:
 ## height (CityTheme.eye_height above the floor) and the old one (twice that).
 func toggle_camera_height_test() -> void:
 	player.set_camera_planned(not player.camera_planned)
-	hud.show_hint("Kamerahöhe %.2f m (%s) · F6 wechselt" % [player.eye_height_world(), "geplant" if player.camera_planned else "bisher"], 3.0)
+	if arena_on():
+		versus.arena.fit_height(player.eye_h + player.camera.position.y)
+	var h := ("%.2f" % player.eye_height_world()).replace(".", ",")
+	hud.show_hint("Kamerahöhe %s m (%s) · F6 wechselt" % [h, "geplant" if player.camera_planned else "bisher"], 3.0)
 
 
-## Schwung spike (tester feedback 16.10.): F7 switches it on/off. A run with
-## Schwung records nothing (no best time, no board), like Training.
+## Schwung spike (tester feedback 16.10.): F7 switches it on/off. Not in
+## Versus (it would decide rounds) and not in the Explorer cities. A level in
+## which it was on at any moment records nothing (`level_flow_used`).
 func toggle_flow_spike() -> void:
+	if (versus != null and versus.active) or playing_explorer:
+		hud.show_hint("Schwung nur im Speedrun und im Training", 2.5)
+		return
 	player.set_flow_enabled(not player.flow_enabled)
+	if player.flow_enabled and running:
+		level_flow_used = true
+		_refresh_board_hud()
 	hud.set_flow(player.flow, player.flow_enabled)
-	hud.show_hint("Schwung %s · Kugeln in Serie machen schneller, Anhalten und Wände kosten ihn · zählt nicht für Bestzeiten · F7" % ("AN" if player.flow_enabled else "AUS"), 4.0)
+	hud.show_hint("Schwung %s · Kugeln ohne Pause fressen = schneller (3 Gänge) · Stehen oder frontal an die Wand kostet einen Gang · Kehrtwende behält ihn · ungewertet · F7" % ("AN" if player.flow_enabled else "AUS"), 4.5)
+
+
+func _on_gear_changed(g: int, up: bool) -> void:
+	if up:
+		Sfx.gear_up(g)
+	else:
+		Sfx.gear_down()
+	hud.set_flow(player.flow, player.flow_enabled)
 
 
 ## ZAP-7 spike: F4 builds / removes a second floor over the running level.
@@ -705,6 +728,8 @@ func begin_training(level_id: String) -> void:
 ## city (theme, grid, metro placement, traffic, level seed) comes from
 ## explorer_cities.gd — this code has no city names in it.
 func start_explorer_level(city_id: String) -> void:
+	player.set_flow_enabled(false) # no Schwung in the calm cities (code review N1)
+	hud.set_flow(0.0, false)
 	var city := ExplorerCitiesScript.get_city(city_id)
 	if city.is_empty():
 		push_warning("start_explorer_level: unknown city '%s' — Manhattan instead" % city_id)
@@ -1383,7 +1408,7 @@ func _refresh_board_hud() -> void:
 		return
 	var board := board_id()
 	hud.current_week = rabbit_week
-	hud.set_board_badge("training" if training_mode else board, WhiteRabbitScript.week_display(WhiteRabbitScript.week_label(rabbit_week), rabbit_week))
+	hud.set_board_badge("test" if level_flow_used else ("training" if training_mode else board), WhiteRabbitScript.week_display(WhiteRabbitScript.week_label(rabbit_week), rabbit_week))
 	var best: Dictionary = Speedrun.best_entry(level_id, board, run_mode())
 	var week_text := ""
 	if board == LevelsScript.BOARD_WEEK and not best.is_empty():
@@ -1546,7 +1571,7 @@ func level_complete_sequence() -> void:
 	var result := {"is_new_best": false, "previous_best": -1.0, "beat_target": false, "target": Speedrun.target_for(cleared_id), "newly_unlocked_bonus": false}
 	# Arena rounds record nothing either: half the pellets, not comparable with
 	# any board (code review K1).
-	var records: bool = not training_mode and not arena_on() and not player.flow_enabled
+	var records: bool = not training_mode and not arena_on() and not level_flow_used
 	if records:
 		result = Speedrun.record_level_time(cleared_id, elapsed, board, mode, week, level_splits if level_splits.size() == Speedrun.SPLIT_MARKS.size() else [])
 	var player_name: String = versus.player_name() if versus != null and versus.active else Leaderboard.DEFAULT_PLAYER_NAME
@@ -1859,7 +1884,7 @@ func _check_pickups() -> void:
 	# no score, no fruit, no completion.
 	if playing_explorer:
 		if result.pellet or result.power:
-			Sfx.munch()
+			Sfx.munch(player.gear if player.flow_enabled else 0)
 		return
 
 	if arena_on():
@@ -1884,7 +1909,7 @@ func _check_pickups() -> void:
 	if result.rabbit:
 		_on_rabbit_picked()
 	if result.pellet or result.power:
-		Sfx.munch()
+		Sfx.munch(player.gear if player.flow_enabled else 0)
 	if result.pellet or result.power or result.fruit:
 		hud.set_score(score)
 

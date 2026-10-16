@@ -17,6 +17,8 @@ func _initialize() -> void:
 
 	var sfx = load("res://scripts/audio_synth.gd").new()
 	sfx._ready()
+	var t_wait := Time.get_ticks_msec()
+	sfx.wait_for_music() # rendered on a worker thread since the review of 16.10.
 
 	# --- both music tracks built into real, non-empty looping WAV buffers ---
 	for name_and_stream in [["arcade", sfx._arcade_music], ["explorer", sfx._explorer_music]]:
@@ -91,9 +93,9 @@ func _initialize() -> void:
 		print("FAIL music volume 0 should mute the music bus")
 	sfx.set_music_volume(0.5)
 	checks += 1
-	if AudioServer.is_bus_mute(AudioServer.get_bus_index(sfx.BUS_MUSIC)) or absf(AudioServer.get_bus_volume_db(AudioServer.get_bus_index(sfx.BUS_MUSIC)) - linear_to_db(0.5)) > 0.01:
+	if AudioServer.is_bus_mute(AudioServer.get_bus_index(sfx.BUS_MUSIC)) or absf(AudioServer.get_bus_volume_db(AudioServer.get_bus_index(sfx.BUS_MUSIC)) - (-15.0)) > 0.01:
 		failures += 1
-		print("FAIL music volume 0.5 should be -6 dB, unmuted")
+		print("FAIL music volume 0.5 should be -15 dB (perceptual), unmuted")
 	sfx.set_music_volume(1.0)
 
 	var layers := [["good", sfx._layer_good], ["bad", sfx._layer_bad]]

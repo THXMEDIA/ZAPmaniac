@@ -34,6 +34,8 @@ const BUS_SFX := "Effekte"
 const MUSIC_DB := -13.0
 
 var _munch_toggle := false
+var _gear_up: AudioStreamWAV
+var _gear_down: AudioStreamWAV
 var _players: Array[AudioStreamPlayer] = []
 var _siren_player: AudioStreamPlayer
 var _siren_normal: AudioStreamWAV
@@ -46,6 +48,7 @@ var _explorer_music: AudioStreamWAV
 var _music_state := "" # "", "arcade", "explorer"
 
 var _layer_player: AudioStreamPlayer
+var _music_task := -1
 var _layer_good: AudioStreamWAV
 var _layer_bad: AudioStreamWAV
 var _layer_state := "" # "", "good", "bad" — what is wanted right now
@@ -101,6 +104,8 @@ func _ready() -> void:
 	_dash = _sweep(260.0, 1100.0, 0.14, "triangle", 0.5)
 	_dash_empty = _tone(150.0, 0.06, "square", 0.3)
 	_turn = _sweep(900.0, 500.0, 0.05, "triangle", 0.35)
+	_gear_up = _sweep(520.0, 880.0, 0.12, "triangle", 0.4)
+	_gear_down = _sweep(520.0, 260.0, 0.25, "triangle", 0.35)
 	_fruit_2 = _tone(1000.0, 0.1, "sine", 0.45)
 	for f in [523.0, 659.0, 784.0, 1047.0]:
 		_clear_notes.append(_tone(f, 0.22, "square", 0.5))
@@ -108,10 +113,10 @@ func _ready() -> void:
 	_crossing_b = _sweep(2050.0, 2650.0, 0.1, "sine", 0.26)
 	_siren_normal = _siren_loop(90.0, 25.0, 3.2, 0.16)
 	_siren_frightened = _siren_loop(220.0, 40.0, 9.0, 0.2)
-	_arcade_music = _build_arcade_music()
-	_explorer_music = _build_explorer_music()
-	_layer_good = _build_layer_good()
-	_layer_bad = _build_layer_bad()
+	# The music takes seconds to render (code review W5, measured ~6 s for all
+	# of _ready on a slow machine): it is built on a worker thread while the
+	# start screen shows; the first play waits for it if needed.
+	_music_task = WorkerThreadPool.add_task(_build_all_music)
 
 	_ensure_buses()
 	for i in range(8):
@@ -137,21 +142,29 @@ func _ready() -> void:
 
 
 func _ensure_buses() -> void:
-	for name in [BUS_MUSIC, BUS_SFX]:
-		if AudioServer.get_bus_index(name) == -1:
+	for bus_name in [BUS_MUSIC, BUS_SFX]:
+		if AudioServer.get_bus_index(bus_name) == -1:
 			AudioServer.add_bus()
 			var idx := AudioServer.bus_count - 1
-			AudioServer.set_bus_name(idx, name)
+			AudioServer.set_bus_name(idx, bus_name)
 			AudioServer.set_bus_send(idx, "Master")
 
 
-## Volume of a bus, linear 0..1 (0 mutes it).
+## Volume of a bus from a slider value 0..1 (0 mutes it). The slider is
+## perceptual, not linear amplitude (UX review 16.10.): 0.5 = -15 dB sounds
+## about half as loud; the bottom of the range is -30 dB.
+const VOLUME_FLOOR_DB := -30.0
+
+static func slider_to_db(v: float) -> float:
+	return lerpf(VOLUME_FLOOR_DB, 0.0, clampf(v, 0.0, 1.0))
+
+
 func set_bus_volume(bus_name: String, linear: float) -> void:
 	_ensure_buses()
 	var idx := AudioServer.get_bus_index(bus_name)
 	var v := clampf(linear, 0.0, 1.0)
 	AudioServer.set_bus_mute(idx, v <= 0.001)
-	AudioServer.set_bus_volume_db(idx, linear_to_db(maxf(v, 0.001)))
+	AudioServer.set_bus_volume_db(idx, slider_to_db(v))
 
 
 func set_music_volume(linear: float) -> void:
@@ -169,21 +182,34 @@ func _free_player() -> AudioStreamPlayer:
 	return _players[0]
 
 
-func _play(stream: AudioStreamWAV, delay := 0.0) -> void:
+func _play(stream: AudioStreamWAV, delay := 0.0, pitch := 1.0) -> void:
 	if delay <= 0.0:
 		var p := _free_player()
 		p.stream = stream
+		p.pitch_scale = pitch
 		p.play()
 	else:
 		await get_tree().create_timer(delay).timeout
 		var p2 := _free_player()
 		p2.stream = stream
+		p2.pitch_scale = pitch
 		p2.play()
 
 
-func munch() -> void:
+## `gear` (Schwung spike): every gear lifts the munch by two semitones, so
+## the chain is heard without looking (UX/GD review 16.10.).
+func munch(gear: int = 0) -> void:
 	_munch_toggle = not _munch_toggle
-	_play(_munch_b if _munch_toggle else _munch_a)
+	_play(_munch_b if _munch_toggle else _munch_a, 0.0, pow(2.0, 2.0 * gear / 12.0))
+
+
+## Schwung: a rising chime per gear up, a short falling tone for a lost gear.
+func gear_up(gear: int) -> void:
+	_play(_gear_up, 0.0, pow(2.0, 4.0 * (gear - 1) / 12.0))
+
+
+func gear_down() -> void:
+	_play(_gear_down)
 
 
 func dash() -> void:
@@ -275,7 +301,26 @@ func set_siren(active: bool, frightened: bool) -> void:
 ## the normal/Matrix run asked for (see the header comment for why this is
 ## synthesized rather than a downloaded track). Call at the start of a
 ## normal run (Main.begin_game).
+func _build_all_music() -> void:
+	_arcade_music = _build_arcade_music()
+	_explorer_music = _build_explorer_music()
+	_layer_good = _build_layer_good()
+	_layer_bad = _build_layer_bad()
+
+
+## Blocks until the music is rendered (only ever waits before the first play).
+func wait_for_music() -> void:
+	if _music_task >= 0:
+		WorkerThreadPool.wait_for_task_completion(_music_task)
+		_music_task = -1
+
+
+func _exit_tree() -> void:
+	wait_for_music() # never quit while the worker still writes
+
+
 func play_arcade_music() -> void:
+	wait_for_music()
 	_set_music("arcade", _arcade_music)
 
 
@@ -285,6 +330,7 @@ func play_arcade_music() -> void:
 ## Herbaliser feel the Explorer run asked for. Call at the start of an
 ## Explorer run (Main.begin_manhattan_game).
 func play_explorer_music() -> void:
+	wait_for_music()
 	_set_music("explorer", _explorer_music)
 
 
@@ -319,6 +365,7 @@ func stop_all() -> void:
 ## A running layer of the other kind is swapped (a new rabbit replaces the
 ## condition, spec 2.2). In sync with the arcade loop when that is playing.
 func start_condition_layer(good: bool) -> void:
+	wait_for_music()
 	var wanted := "good" if good else "bad"
 	var stream: AudioStreamWAV = _layer_good if good else _layer_bad
 	_layer_target = 1.0

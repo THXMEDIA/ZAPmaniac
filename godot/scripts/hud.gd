@@ -40,7 +40,7 @@ const RABBIT_WHITE := Color("f2f2ed")
 const OPP_COLOR := Color("dda6ff")
 ## Board badge colors (spec 2.5): the weekly board neutral, Chaos amber,
 ## Chat violet (Twitch-ish) — none of them the good/bad condition colors.
-const BOARD_COLORS := {"woche": Color(1.0, 0.82, 0.4), "chaos": Color("ffa41f"), "chat": Color("b78cff"), "training": Color("7fd8ff")}
+const BOARD_COLORS := {"woche": Color(1.0, 0.82, 0.4), "chaos": Color("ffa41f"), "chat": Color("b78cff"), "training": Color("7fd8ff"), "test": Color(0.62, 0.66, 0.72)}
 const MUTED := Color(0.56, 0.64, 0.78)
 ## Kippbild with "Effekte reduzieren" (UX-K1): the world does not tip, a thin
 ## frame in the complement palette's light cyan shows the manipulation.
@@ -152,6 +152,8 @@ var fov_value_labels: Array = []
 var sens_value_labels: Array = []
 var music_sliders: Array = []
 var sfx_sliders: Array = []
+var music_value_labels: Array = []
+var sfx_value_labels: Array = []
 var comfort_start_block: Control
 var comfort_pause_block: Control
 var _comfort_syncing := false
@@ -302,9 +304,6 @@ func _build_hud_bar() -> void:
 
 	dash_label = _make_chip(left, "DASH", "●")
 	dash_chip = dash_label.get_parent().get_parent()
-	flow_label = _make_chip(left, "SCHWUNG", "")
-	flow_chip = flow_label.get_parent().get_parent()
-	flow_chip.visible = false
 
 	# Debug overlay (FPS / player position / cell) — hidden unless
 	# set_debug_overlay(true) is called (F3 in debug builds, see main.gd).
@@ -325,6 +324,12 @@ func _build_hud_bar() -> void:
 	lives_tag.add_theme_color_override("font_color", MUTED)
 	lives_tag.add_theme_font_size_override("font_size", 12)
 	lives_box.add_child(lives_tag)
+	# Schwung spike: at the END of the column, so switching it never moves
+	# LEBEN (UX W5); the main display is the gear bar under the compass
+	flow_label = _make_chip(left, "SCHWUNG", "")
+	flow_chip = flow_label.get_parent().get_parent()
+	flow_chip.visible = false
+	_build_gear_bar()
 
 	minimap = Control.new()
 	minimap.custom_minimum_size = Vector2(150, 150)
@@ -367,6 +372,8 @@ func _make_chip(parent: Control, label_text: String, value_text: String) -> Labe
 ## or the game over.
 func set_game_hud_visible(on: bool) -> void:
 	game_hud.visible = on
+	if gear_bar != null:
+		gear_bar.visible = on and _flow_enabled_shown
 	_refresh_map_mode()
 	if not on:
 		power_wrap.visible = false
@@ -438,7 +445,10 @@ func set_board_badge(board: String, week_text: String = "") -> void:
 	if board == "":
 		board_label.text = ""
 		return
-	board_label.text = ("WOCHE · %s" % week_text) if board == LevelsScript.BOARD_WEEK else board.to_upper()
+	if board == "test":
+		board_label.text = "TEST · UNGEWERTET"
+	else:
+		board_label.text = ("WOCHE · %s" % week_text) if board == LevelsScript.BOARD_WEEK else board.to_upper()
 	board_label.add_theme_color_override("font_color", BOARD_COLORS.get(board, PELLET_COLOR))
 
 
@@ -517,18 +527,58 @@ func set_dash(charges: int, max_charges: int, ready: bool) -> void:
 	dash_label.modulate = Color(1, 1, 1, 1.0 if ready or charges == 0 else 0.55)
 
 
-## Schwung spike: five segments and the speed bonus ("■■■□□ +15 %").
+## Schwung spike: the gear bar right under the compass (in the line of
+## sight, UX W4) and the chip at the end of the left column ("GANG 2 +18 %").
+## Only written when the value changed.
+const GEAR_BAR_W := 240.0
+const GEAR_COLORS := [Color(0.2, 0.878, 1.0), Color(0.55, 0.9, 0.75), Color(1.0, 0.82, 0.4)]
+var gear_bar: HBoxContainer
+var _gear_segments: Array = []
+var _flow_shown := -1.0
+var _flow_enabled_shown := false
+
+
+func _build_gear_bar() -> void:
+	gear_bar = HBoxContainer.new()
+	gear_bar.name = "GearBar"
+	gear_bar.set_anchors_preset(Control.PRESET_CENTER_TOP)
+	gear_bar.offset_left = -GEAR_BAR_W * 0.5
+	gear_bar.offset_right = GEAR_BAR_W * 0.5
+	gear_bar.offset_top = 8 + COMPASS_H + 4
+	gear_bar.offset_bottom = 8 + COMPASS_H + 10
+	gear_bar.add_theme_constant_override("separation", 4)
+	gear_bar.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	gear_bar.visible = false
+	for i in 3:
+		var seg := ColorRect.new()
+		seg.custom_minimum_size = Vector2((GEAR_BAR_W - 8.0) / 3.0, 6)
+		seg.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		seg.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		gear_bar.add_child(seg)
+		_gear_segments.append(seg)
+	add_child(gear_bar)
+
+
 func set_flow(value: float, enabled: bool) -> void:
 	if flow_chip == null:
 		return
+	if is_equal_approx(value, _flow_shown) and enabled == _flow_enabled_shown:
+		return
+	_flow_shown = value
+	_flow_enabled_shown = enabled
 	flow_chip.visible = enabled
+	gear_bar.visible = enabled and game_hud != null and game_hud.visible
 	if not enabled:
 		return
-	var n := clampi(int(ceil(value * 5.0 - 0.001)), 0, 5)
-	var t := ""
-	for i in 5:
-		t += "■" if i < n else "□"
-	flow_label.text = "%s +%d %%" % [t, roundi(value * 25.0)]
+	var g := 0
+	for k in 4:
+		if value >= [0.0, 0.39, 0.71, 0.99][k]:
+			g = k
+	flow_label.text = "GANG %d  +%d %%" % [g, roundi(value * 25.0)]
+	flow_chip.modulate = Color(1, 1, 1, 1.0 if g > 0 else 0.5)
+	for i in 3:
+		var seg: ColorRect = _gear_segments[i]
+		seg.color = GEAR_COLORS[i] if i < g else Color(1, 1, 1, 0.12)
 
 
 func set_dash_visible(on: bool) -> void:
@@ -754,12 +804,12 @@ func _build_comfort_block() -> Control:
 	var vol_row := HBoxContainer.new()
 	vol_row.add_theme_constant_override("separation", 10)
 	col.add_child(vol_row)
-	var music_s := _volume_slider(vol_row, "Musik")
+	var music_s := _volume_slider(vol_row, "Musik", music_value_labels)
 	music_s.value_changed.connect(func(v: float):
 		if not _comfort_syncing:
 			music_volume_changed.emit(v))
 	music_sliders.append(music_s)
-	var sfx_s := _volume_slider(vol_row, "Effekte")
+	var sfx_s := _volume_slider(vol_row, "Geräusche", sfx_value_labels)
 	sfx_s.value_changed.connect(func(v: float):
 		if not _comfort_syncing:
 			sfx_volume_changed.emit(v))
@@ -769,7 +819,7 @@ func _build_comfort_block() -> Control:
 	return panel
 
 
-func _volume_slider(row: HBoxContainer, text: String) -> HSlider:
+func _volume_slider(row: HBoxContainer, text: String, value_labels: Array) -> HSlider:
 	var l := Label.new()
 	l.text = text
 	l.add_theme_font_size_override("font_size", TEXT_PX)
@@ -782,9 +832,21 @@ func _volume_slider(row: HBoxContainer, text: String) -> HSlider:
 	s.custom_minimum_size = Vector2(110, 20)
 	s.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	s.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	s.tooltip_text = "%s-Lautstärke (ganz links = aus)" % text
+	s.tooltip_text = "Lautstärke der Musik (ganz links = aus)" if text == "Musik" else "Lautstärke der Spielgeräusche: Kugeln, Geister, Sirene (ganz links = aus)"
 	row.add_child(s)
+	var v := Label.new()
+	v.custom_minimum_size.x = 44
+	v.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	v.add_theme_font_size_override("font_size", TEXT_PX)
+	v.add_theme_color_override("font_color", PELLET_COLOR)
+	row.add_child(v)
+	value_labels.append(v)
+	s.value_changed.connect(func(val: float): v.text = _volume_text(val))
 	return s
+
+
+static func _volume_text(v: float) -> String:
+	return "aus" if v <= 0.001 else "%d %%" % roundi(v * 100.0)
 
 
 ## Shows the stored volumes on both blocks without re-emitting.
@@ -794,6 +856,10 @@ func set_volumes(music: float, sfx: float) -> void:
 		s.value = music
 	for s in sfx_sliders:
 		s.value = sfx
+	for l in music_value_labels:
+		l.text = _volume_text(music)
+	for l in sfx_value_labels:
+		l.text = _volume_text(sfx)
 	_comfort_syncing = false
 
 
