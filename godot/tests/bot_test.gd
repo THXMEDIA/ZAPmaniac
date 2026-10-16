@@ -56,6 +56,7 @@ func _ready() -> void:
 	await _run_split_checks()
 	await _run_map_mode_checks()
 	await _run_etagen_checks()
+	await _run_feedback_1016_checks()
 
 	_check("test isolation: Speedrun saves under the test folder", Speedrun.save_path().begins_with(SaveIsolation.SavePathsScript.TEST_ROOT), Speedrun.save_path())
 	_check("test isolation: Leaderboard saves under the test folder", Leaderboard.save_path().begins_with(SaveIsolation.SavePathsScript.TEST_ROOT), Leaderboard.save_path())
@@ -2394,3 +2395,79 @@ func _labels_under(node: Node) -> Array:
 			out.append(ch)
 		out.append_array(_labels_under(ch))
 	return out
+
+
+## Tester feedback 16.10.: camera height test (F6), Schwung spike (F7), volumes.
+func _run_feedback_1016_checks() -> void:
+	main.begin_game("klassik-1")
+	await get_tree().process_frame
+	var pl = main.player
+	# camera height
+	_check("camera: so far the eyes sit at twice the eye height (2.5 m)", not pl.camera_planned and is_equal_approx(pl.eye_height_world(), 2.0 * pl.eye_h) and is_equal_approx(pl.camera.global_position.y, 2.0 * pl.eye_h))
+	var yaw0: float = pl.yaw
+	main.toggle_camera_height_test()
+	_check("camera: F6 puts the eyes at the planned height (1.25 m)", pl.camera_planned and is_equal_approx(pl.camera.global_position.y, pl.eye_h))
+	_check("camera: the switch never turns the view (E8e)", is_equal_approx(pl.yaw, yaw0) and is_equal_approx(pl.camera.rotation.x, pl.pitch))
+	main.toggle_camera_height_test()
+	_check("camera: F6 again restores the old height", not pl.camera_planned and is_equal_approx(pl.camera.global_position.y, 2.0 * pl.eye_h))
+
+	# Schwung: off by default, no effect
+	_check("schwung: off by default, no speed change", not pl.flow_enabled and is_equal_approx(pl.flow_speed_factor(), 1.0) and not main.hud.flow_chip.visible)
+	pl.on_pellet()
+	_check("schwung: pellets do nothing while it is off", is_equal_approx(pl.flow, 0.0))
+	main.toggle_flow_spike()
+	main._process(0.016)
+	_check("schwung: F7 switches it on, the HUD chip shows", pl.flow_enabled and main.hud.flow_chip.visible)
+	for i in 3:
+		pl.on_pellet()
+	_check("schwung: three pellets in a row = 36 %% flow, +9 %% speed", is_equal_approx(pl.flow, 0.36) and is_equal_approx(pl.flow_speed_factor(), 1.09), str(pl.flow))
+	pl._update_flow(0.5, true)
+	_check("schwung: it holds right after a pellet", is_equal_approx(pl.flow, 0.36))
+	pl._update_flow(0.5, true)
+	_check("schwung: then it drains", pl.flow < 0.36 and pl.flow > 0.0, str(pl.flow))
+	for i in 20:
+		pl.on_pellet()
+	_check("schwung: capped at 100 %% (+25 %% speed)", is_equal_approx(pl.flow, 1.0) and is_equal_approx(pl.flow_speed_factor(), 1.25))
+	pl._update_flow(0.2, false)
+	_check("schwung: standing still drains it fast", pl.flow < 0.5, str(pl.flow))
+	# a head-on wall hit costs flow, walking along a corridor does not
+	var mz = main.maze
+	var wall_cell := Vector2i(-1, -1)
+	for c in MazeGen.cells_in_room(mz, false):
+		if mz.grid[c.x - 1][c.y] == 1 and mz.grid[c.x + 1][c.y] == 0:
+			wall_cell = c
+			break
+	main.invuln_until = 1e9
+	for e in main.enemies:
+		e.release_at = 1e9
+	pl.global_position = Vector3(wall_cell.y * 2.0, pl.eye_h, wall_cell.x * 2.0)
+	pl.yaw = 0.0 # forward = -z = row - 1 = the wall
+	pl.rotation.y = 0.0
+	for i in 20:
+		pl.on_pellet()
+	var hits0: int = pl.flow_wall_hits
+	pl.move_input = Vector2(0, 1)
+	for i in 40:
+		await get_tree().physics_frame
+	pl.move_input = Vector2.ZERO
+	_check("schwung: running head-on into a wall costs flow", pl.flow_wall_hits > hits0 and pl.flow < 0.6, "hits %d flow %.2f" % [pl.flow_wall_hits - hits0, pl.flow])
+	# a level with Schwung records nothing
+	var top_before: int = Leaderboard.get_top("klassik-1", main.board_id(), 50, main.run_mode()).size()
+	main.level_start_real = main.real_now - 42.0
+	main.level_complete_sequence()
+	_check("schwung: a cleared level with Schwung goes on no board", Leaderboard.get_top("klassik-1", main.board_id(), 50, main.run_mode()).size() == top_before)
+	main.begin_game("klassik-1")
+	await get_tree().process_frame
+	_check("schwung: a new level starts with no flow (still on)", pl.flow_enabled and is_equal_approx(pl.flow, 0.0))
+	main.toggle_flow_spike()
+	_check("schwung: F7 again switches it off", not pl.flow_enabled and is_equal_approx(pl.flow_speed_factor(), 1.0))
+
+	# volumes
+	main.set_music_volume(0.3)
+	var mb := AudioServer.get_bus_index(Sfx.BUS_MUSIC)
+	_check("volume: the music slider sets the music bus", absf(AudioServer.get_bus_volume_db(mb) - linear_to_db(0.3)) < 0.01 and main.hud.music_sliders.all(func(sl): return is_equal_approx(sl.value, 0.3)))
+	main.set_sfx_volume(0.0)
+	_check("volume: effects at 0 are muted", AudioServer.is_bus_mute(AudioServer.get_bus_index(Sfx.BUS_SFX)))
+	main.set_music_volume(main.SettingsScript.MUSIC_VOL_DEFAULT)
+	main.set_sfx_volume(main.SettingsScript.SFX_VOL_DEFAULT)
+

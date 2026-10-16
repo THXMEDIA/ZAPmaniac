@@ -260,6 +260,9 @@ var chaos_mode := false
 ## sensitivity (factor on PlayerController.MOUSE_SENSITIVITY).
 var fov := 72.0
 var mouse_sens := 1.0
+## Volumes 0..1 (Settings "music_vol" / "sfx_vol").
+var music_vol := 0.7
+var sfx_vol := 1.0
 
 ## Debug overlay (FPS, player position, cell): toggled with F3, debug builds only.
 var debug_mode := false
@@ -295,6 +298,10 @@ func _ready() -> void:
 	chaos_mode = settings.chaos
 	fov = settings.fov
 	mouse_sens = settings.mouse_sens
+	music_vol = settings.music_vol
+	sfx_vol = settings.sfx_vol
+	Sfx.set_music_volume(music_vol)
+	Sfx.set_sfx_volume(sfx_vol)
 	_build_environment()
 	_build_player()
 	_apply_comfort()
@@ -313,6 +320,7 @@ func _ready() -> void:
 	hud.set_reduce_rain(reduce_rain)
 	hud.set_chaos_mode(chaos_mode)
 	hud.set_comfort(fov, mouse_sens)
+	hud.set_volumes(music_vol, sfx_vol)
 	hud.set_game_hud_visible(false)
 	hud.show_only(hud.start_panel)
 	versus = VersusControllerScript.new()
@@ -470,6 +478,20 @@ func set_fov(v: float) -> void:
 	hud.set_comfort(fov, mouse_sens)
 
 
+func set_music_volume(v: float) -> void:
+	music_vol = clampf(v, 0.0, 1.0)
+	Sfx.set_music_volume(music_vol)
+	_save_settings()
+	hud.set_volumes(music_vol, sfx_vol)
+
+
+func set_sfx_volume(v: float) -> void:
+	sfx_vol = clampf(v, 0.0, 1.0)
+	Sfx.set_sfx_volume(sfx_vol)
+	_save_settings()
+	hud.set_volumes(music_vol, sfx_vol)
+
+
 func set_mouse_sens(v: float) -> void:
 	mouse_sens = clampf(v, SettingsScript.SENS_MIN, SettingsScript.SENS_MAX)
 	_apply_comfort()
@@ -492,6 +514,8 @@ func _build_hud() -> void:
 	hud.reduce_rain_toggled.connect(set_reduce_rain)
 	hud.fov_changed.connect(set_fov)
 	hud.mouse_sens_changed.connect(set_mouse_sens)
+	hud.music_volume_changed.connect(set_music_volume)
+	hud.sfx_volume_changed.connect(set_sfx_volume)
 	hud.chaos_toggled.connect(set_chaos_mode)
 	hud.twitch_toggled.connect(_on_twitch_toggled)
 	Twitch.chat_command.connect(_on_twitch_command)
@@ -550,6 +574,7 @@ func start_level(level: Dictionary) -> void:
 	# if collision just turned on, and running that against the PREVIOUS
 	# level's position/maze risked an unnecessary extra teleport right
 	# before warp_to overwrote it anyway.
+	player.reset_flow()
 	player.warp_to(start_cell, _facing_yaw_for_start(start_cell)) # GD-W10: look down the longest open corridor instead of a fixed direction
 	player.reset_dash()
 	_refresh_noclip()
@@ -625,6 +650,21 @@ func begin_game(forced_level_id: String = "", training: bool = false) -> void:
 	Sfx.play_arcade_music()
 	if not OS.has_feature("web"):
 		Input.set_mouse_mode(Input.MOUSE_MODE_CAPTURED)
+
+
+## Tester feedback 16.10.: F6 switches the camera between the planned eye
+## height (CityTheme.eye_height above the floor) and the old one (twice that).
+func toggle_camera_height_test() -> void:
+	player.set_camera_planned(not player.camera_planned)
+	hud.show_hint("Kamerahöhe %.2f m (%s) · F6 wechselt" % [player.eye_height_world(), "geplant" if player.camera_planned else "bisher"], 3.0)
+
+
+## Schwung spike (tester feedback 16.10.): F7 switches it on/off. A run with
+## Schwung records nothing (no best time, no board), like Training.
+func toggle_flow_spike() -> void:
+	player.set_flow_enabled(not player.flow_enabled)
+	hud.set_flow(player.flow, player.flow_enabled)
+	hud.show_hint("Schwung %s · Kugeln in Serie machen schneller, Anhalten und Wände kosten ihn · zählt nicht für Bestzeiten · F7" % ("AN" if player.flow_enabled else "AUS"), 4.0)
 
 
 ## ZAP-7 spike: F4 builds / removes a second floor over the running level.
@@ -1172,7 +1212,7 @@ func set_chaos_mode(on: bool) -> void:
 
 
 func _save_settings() -> void:
-	SettingsScript.save_settings({"reduce_fx": reduce_fx, "reduce_rain": reduce_rain, "chaos": chaos_mode, "fov": fov, "mouse_sens": mouse_sens})
+	SettingsScript.save_settings({"reduce_fx": reduce_fx, "reduce_rain": reduce_rain, "chaos": chaos_mode, "fov": fov, "mouse_sens": mouse_sens, "music_vol": music_vol, "sfx_vol": sfx_vol})
 
 
 ## ---------------- speedrun start: intro and hold (spec 2.1) ----------------
@@ -1378,6 +1418,7 @@ func lose_life() -> void:
 	_end_condition(false)
 	player.warp_to(start_cell, _facing_yaw_for_start(start_cell))
 	player.reset_dash()
+	player.reset_flow()
 	_refresh_noclip()
 	invuln_until = now + 1.6
 	if arena_on():
@@ -1505,7 +1546,7 @@ func level_complete_sequence() -> void:
 	var result := {"is_new_best": false, "previous_best": -1.0, "beat_target": false, "target": Speedrun.target_for(cleared_id), "newly_unlocked_bonus": false}
 	# Arena rounds record nothing either: half the pellets, not comparable with
 	# any board (code review K1).
-	var records: bool = not training_mode and not arena_on()
+	var records: bool = not training_mode and not arena_on() and not player.flow_enabled
 	if records:
 		result = Speedrun.record_level_time(cleared_id, elapsed, board, mode, week, level_splits if level_splits.size() == Speedrun.SPLIT_MARKS.size() else [])
 	var player_name: String = versus.player_name() if versus != null and versus.active else Leaderboard.DEFAULT_PLAYER_NAME
@@ -1652,6 +1693,10 @@ func _unhandled_input(event: InputEvent) -> void:
 			toggle_pause()
 	if OS.is_debug_build() and event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_F4:
 		toggle_etagen_spike()
+	if OS.is_debug_build() and event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_F6:
+		toggle_camera_height_test()
+	if OS.is_debug_build() and event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_F7:
+		toggle_flow_spike()
 	if OS.is_debug_build() and event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_F3:
 		debug_mode = not debug_mode
 		hud.set_debug_overlay(debug_mode)
@@ -1750,6 +1795,7 @@ func _process(delta: float) -> void:
 	else:
 		hud.update_minimap(maze, player, enemies, frightened_active, maze_view)
 	hud.set_dash(player.dash_charges, player.DASH_MAX_CHARGES, player.dash_cooldown_left <= 0.0)
+	hud.set_flow(player.flow, player.flow_enabled)
 
 
 func _check_enemy_collision(enemy, frightened_active: bool) -> void:
@@ -1818,6 +1864,8 @@ func _check_pickups() -> void:
 
 	if arena_on():
 		versus.arena.on_pickups(result)
+	if result.pellet or result.power:
+		player.on_pellet()
 	if result.pellet:
 		_add_score(10)
 	if result.power:

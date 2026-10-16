@@ -71,6 +71,31 @@ func _initialize() -> void:
 		print("FAIL stop_all() should also stop the background music")
 
 	# --- condition music layer (spec 2.2): starts, ramps, ends -------------
+	# --- tester feedback 16.10.: softer, longer arcade loop, own buses ---
+	checks += 1
+	if sfx._arcade_music.get_length() < 15.0:
+		failures += 1
+		print("FAIL the arcade loop should be at least 15 s long (was 4.8 s), got %.2f" % sfx._arcade_music.get_length())
+	checks += 1
+	if AudioServer.get_bus_index(sfx.BUS_MUSIC) == -1 or AudioServer.get_bus_index(sfx.BUS_SFX) == -1:
+		failures += 1
+		print("FAIL music and effect buses should exist")
+	checks += 1
+	if sfx._music_player.bus != sfx.BUS_MUSIC or sfx._layer_player.bus != sfx.BUS_MUSIC or sfx._siren_player.bus != sfx.BUS_SFX:
+		failures += 1
+		print("FAIL music/layer on the music bus, siren on the effect bus")
+	sfx.set_music_volume(0.0)
+	checks += 1
+	if not AudioServer.is_bus_mute(AudioServer.get_bus_index(sfx.BUS_MUSIC)):
+		failures += 1
+		print("FAIL music volume 0 should mute the music bus")
+	sfx.set_music_volume(0.5)
+	checks += 1
+	if AudioServer.is_bus_mute(AudioServer.get_bus_index(sfx.BUS_MUSIC)) or absf(AudioServer.get_bus_volume_db(AudioServer.get_bus_index(sfx.BUS_MUSIC)) - linear_to_db(0.5)) > 0.01:
+		failures += 1
+		print("FAIL music volume 0.5 should be -6 dB, unmuted")
+	sfx.set_music_volume(1.0)
+
 	var layers := [["good", sfx._layer_good], ["bad", sfx._layer_bad]]
 	for pair in layers:
 		var st: AudioStreamWAV = pair[1]
@@ -79,9 +104,10 @@ func _initialize() -> void:
 			failures += 1
 			print("FAIL %s layer should be a non-empty looping buffer" % pair[0])
 		checks += 1
-		if st != null and absf(st.get_length() - sfx._arcade_music.get_length()) > 0.01:
+		var ratio: float = sfx._arcade_music.get_length() / st.get_length() if st != null else 0.0
+		if st != null and absf(ratio - roundf(ratio)) > 0.001:
 			failures += 1
-			print("FAIL %s layer should be as long as the arcade loop (in sync), %f vs %f" % [pair[0], st.get_length(), sfx._arcade_music.get_length()])
+			print("FAIL %s layer should tile the arcade loop exactly (in sync), %f vs %f" % [pair[0], st.get_length(), sfx._arcade_music.get_length()])
 	checks += 1
 	if sfx._layer_good.data == sfx._layer_bad.data:
 		failures += 1

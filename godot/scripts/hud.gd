@@ -19,6 +19,8 @@ signal reduce_rain_toggled(on: bool)
 ## UX-K1 comfort block: field of view (degrees) and mouse sensitivity (factor).
 signal fov_changed(value: float)
 signal mouse_sens_changed(value: float)
+signal music_volume_changed(value: float)
+signal sfx_volume_changed(value: float)
 signal chaos_toggled(on: bool)
 signal twitch_toggled(is_enabled: bool, channel: String)
 signal versus_pressed
@@ -148,6 +150,8 @@ var fov_sliders: Array = []
 var sens_sliders: Array = []
 var fov_value_labels: Array = []
 var sens_value_labels: Array = []
+var music_sliders: Array = []
+var sfx_sliders: Array = []
 var comfort_start_block: Control
 var comfort_pause_block: Control
 var _comfort_syncing := false
@@ -227,6 +231,8 @@ var debug_label: Label
 ## Dash charges ("● ○"), see set_dash(); the chip is hidden in Explorer cities.
 var dash_label: Label
 var dash_chip: Control
+var flow_label: Label
+var flow_chip: Control
 var twitch_toggle: CheckBox
 var twitch_channel_edit: LineEdit
 var twitch_status_label: Label
@@ -296,6 +302,9 @@ func _build_hud_bar() -> void:
 
 	dash_label = _make_chip(left, "DASH", "●")
 	dash_chip = dash_label.get_parent().get_parent()
+	flow_label = _make_chip(left, "SCHWUNG", "")
+	flow_chip = flow_label.get_parent().get_parent()
+	flow_chip.visible = false
 
 	# Debug overlay (FPS / player position / cell) — hidden unless
 	# set_debug_overlay(true) is called (F3 in debug builds, see main.gd).
@@ -508,6 +517,20 @@ func set_dash(charges: int, max_charges: int, ready: bool) -> void:
 	dash_label.modulate = Color(1, 1, 1, 1.0 if ready or charges == 0 else 0.55)
 
 
+## Schwung spike: five segments and the speed bonus ("■■■□□ +15 %").
+func set_flow(value: float, enabled: bool) -> void:
+	if flow_chip == null:
+		return
+	flow_chip.visible = enabled
+	if not enabled:
+		return
+	var n := clampi(int(ceil(value * 5.0 - 0.001)), 0, 5)
+	var t := ""
+	for i in 5:
+		t += "■" if i < n else "□"
+	flow_label.text = "%s +%d %%" % [t, roundi(value * 25.0)]
+
+
 func set_dash_visible(on: bool) -> void:
 	dash_chip.visible = on
 
@@ -562,7 +585,8 @@ func _build_start_panel() -> void:
 	reduce_rain_start.text = "Regen reduzieren (Tokyo)"
 	box.add_child(comfort_start_block)
 
-	box.add_child(_subtitle_label("Lauf durchs Labyrinth, schlucke jede Kugel, weich den Wesen aus.  WASD laufen · Maus umschauen · Shift Dash · Q Kehrtwende · Esc Pause"))
+	# one line (the volume row of the comfort block needs the room, 1152 x 720)
+	box.add_child(_subtitle_label("WASD laufen · Maus schauen · Shift Dash · Q Kehrtwende · Esc Pause"))
 
 	var hs_row := HBoxContainer.new()
 	hs_row.alignment = BoxContainer.ALIGNMENT_CENTER
@@ -726,8 +750,51 @@ func _build_comfort_block() -> Control:
 		if not _comfort_syncing:
 			mouse_sens_changed.emit(v))
 	sens_sliders.append(sens_s)
+	# music and effects in ONE row (the start screen must keep fitting 1152 x 720)
+	var vol_row := HBoxContainer.new()
+	vol_row.add_theme_constant_override("separation", 10)
+	col.add_child(vol_row)
+	var music_s := _volume_slider(vol_row, "Musik")
+	music_s.value_changed.connect(func(v: float):
+		if not _comfort_syncing:
+			music_volume_changed.emit(v))
+	music_sliders.append(music_s)
+	var sfx_s := _volume_slider(vol_row, "Effekte")
+	sfx_s.value_changed.connect(func(v: float):
+		if not _comfort_syncing:
+			sfx_volume_changed.emit(v))
+	sfx_sliders.append(sfx_s)
 	set_comfort(SettingsScript.FOV_DEFAULT, 1.0)
+	set_volumes(SettingsScript.MUSIC_VOL_DEFAULT, SettingsScript.SFX_VOL_DEFAULT)
 	return panel
+
+
+func _volume_slider(row: HBoxContainer, text: String) -> HSlider:
+	var l := Label.new()
+	l.text = text
+	l.add_theme_font_size_override("font_size", TEXT_PX)
+	l.add_theme_color_override("font_color", RABBIT_WHITE)
+	row.add_child(l)
+	var s := HSlider.new()
+	s.min_value = 0.0
+	s.max_value = 1.0
+	s.step = 0.05
+	s.custom_minimum_size = Vector2(110, 20)
+	s.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	s.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	s.tooltip_text = "%s-Lautstärke (ganz links = aus)" % text
+	row.add_child(s)
+	return s
+
+
+## Shows the stored volumes on both blocks without re-emitting.
+func set_volumes(music: float, sfx: float) -> void:
+	_comfort_syncing = true
+	for s in music_sliders:
+		s.value = music
+	for s in sfx_sliders:
+		s.value = sfx
+	_comfort_syncing = false
 
 
 func _comfort_slider(parent: Control, text: String, lo: float, hi: float, step: float, value_labels: Array) -> HSlider:

@@ -28,6 +28,31 @@ const DASH_START_CHARGES := 1
 const TURN_COOLDOWN := 0.4 # s -> far below 3 Hz
 
 var camera: Camera3D
+## Camera height test (tester feedback 16.10.): the body stands at y = eye_h
+## and the camera sat ANOTHER eye_h above it (2.5 m instead of the planned
+## 1.25 m). `camera_planned` puts the camera at the body's centre, i.e. at
+## eye_h above the floor. Toggled with F6 in debug builds to compare.
+var camera_planned := false
+
+## ---- Schwung (flow) spike, tester feedback 16.10. ----
+## Eating pellets in a row builds flow, flow adds up to FLOW_MAX_BONUS speed.
+## It holds FLOW_HOLD_S after the last pellet, then drains; running head-on
+## into a wall or standing still costs it. Only the walking speed changes —
+## camera and FOV never (red line E8e). Off unless `flow_enabled` (F7).
+const FLOW_GAIN := 0.12
+const FLOW_MAX_BONUS := 0.25
+const FLOW_HOLD_S := 0.7
+const FLOW_DECAY := 0.9 # per second after the hold
+const FLOW_IDLE_DECAY := 3.0 # per second while standing
+const FLOW_WALL_KEEP := 0.4 # share kept after a head-on wall hit
+const FLOW_WALL_HEADON := 0.5 # dot(normal, -direction) above this = head-on
+const FLOW_WALL_COOLDOWN := 0.3
+var flow_enabled := false
+var flow := 0.0
+var _flow_hold := 0.0
+var _flow_wall_cd := 0.0
+## Counter for tests.
+var flow_wall_hits := 0
 ## Current eye height of the camera (m), set per city by set_eye_height().
 var eye_h := EYE_H
 ## Walking speed (m/s): PLAYER_SPEED in timed levels, EXPLORER_SPEED in the Explorer cities (set by Main).
@@ -92,7 +117,7 @@ func _ready() -> void:
 	add_child(cs)
 
 	camera = Camera3D.new()
-	camera.position = Vector3(0, eye_h, 0)
+	camera.position = Vector3(0, _camera_y(), 0)
 	camera.fov = 72.0
 	camera.near = 0.05
 	camera.far = 100.0
@@ -146,7 +171,75 @@ func _refresh_mask() -> void:
 func set_eye_height(h: float) -> void:
 	eye_h = h
 	if camera != null:
-		camera.position = Vector3(0, eye_h, 0)
+		camera.position = Vector3(0, _camera_y(), 0)
+
+
+func _camera_y() -> float:
+	return 0.0 if camera_planned else eye_h
+
+
+## F6 test: planned (eye_h above the floor) or the old height (2 × eye_h).
+func set_camera_planned(on: bool) -> void:
+	camera_planned = on
+	if camera != null:
+		camera.position = Vector3(0, _camera_y(), 0)
+
+
+## Height of the eyes above the floor right now (m).
+func eye_height_world() -> float:
+	return eye_h + _camera_y()
+
+
+## ---- Schwung ----
+
+func set_flow_enabled(on: bool) -> void:
+	flow_enabled = on
+	reset_flow()
+
+
+func reset_flow() -> void:
+	flow = 0.0
+	_flow_hold = 0.0
+	_flow_wall_cd = 0.0
+
+
+## A pellet (or power pellet) was eaten.
+func on_pellet() -> void:
+	if not flow_enabled:
+		return
+	flow = minf(flow + FLOW_GAIN, 1.0)
+	_flow_hold = FLOW_HOLD_S
+
+
+func flow_speed_factor() -> float:
+	return 1.0 + FLOW_MAX_BONUS * flow if flow_enabled else 1.0
+
+
+func _update_flow(delta: float, moving: bool) -> void:
+	_flow_wall_cd = maxf(_flow_wall_cd - delta, 0.0)
+	if not flow_enabled:
+		return
+	if not moving:
+		flow = maxf(flow - FLOW_IDLE_DECAY * delta, 0.0)
+		return
+	var drain_t := delta
+	if _flow_hold > 0.0:
+		drain_t = maxf(delta - _flow_hold, 0.0) # only the part after the hold drains
+		_flow_hold = maxf(_flow_hold - delta, 0.0)
+	flow = maxf(flow - FLOW_DECAY * drain_t, 0.0)
+
+
+## After move_and_slide: a head-on hit (not a graze along a wall) costs flow.
+func _check_flow_wall(dir: Vector3) -> void:
+	if not flow_enabled or flow <= 0.0 or _flow_wall_cd > 0.0 or dir.length() < 0.1:
+		return
+	for i in get_slide_collision_count():
+		var n := get_slide_collision(i).get_normal()
+		if n.dot(-dir.normalized()) > FLOW_WALL_HEADON:
+			flow *= FLOW_WALL_KEEP
+			_flow_wall_cd = FLOW_WALL_COOLDOWN
+			flow_wall_hits += 1
+			return
 
 
 func warp_to(cell: Vector2i, facing_yaw: float) -> void:
@@ -229,8 +322,10 @@ func _physics_process(delta: float) -> void:
 	var right_z := cos(yaw + PI / 2.0)
 	var move_dir := Vector3(dir_x * v.y + right_x * v.x, 0.0, dir_z * v.y + right_z * v.x)
 	_last_move_input = v
-	velocity = move_dir * move_speed
+	_update_flow(delta, v.length() > 0.1)
+	velocity = move_dir * move_speed * flow_speed_factor()
 	move_and_slide()
+	_check_flow_wall(move_dir)
 
 
 ## True while the dash runs and for a moment after it: normal ghosts do not

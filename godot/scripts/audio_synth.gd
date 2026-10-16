@@ -19,13 +19,19 @@ extends Node
 const SAMPLE_RATE := 44100
 ## Condition music layer (spec 2.2: "Musikschicht für die Dauer"): an extra
 ## loop on top of the arcade track while a rabbit condition runs — bright
-## arpeggios for a good one, a detuned low pulse for a bad one. Same length
-## and tempo as the arcade loop (32 eighths at 0.15 s), started in sync with
-## it, faded in and out with a volume ramp (never a hard cut).
+## arpeggios for a good one, a detuned low pulse for a bad one. One arcade
+## phrase long (32 eighths at 0.15 s, the arcade loop is four of them), started
+## in sync with it, faded in and out with a volume ramp (never a hard cut).
 const LAYER_FADE_IN_S := 0.6
 const LAYER_FADE_OUT_S := 0.9
 const LAYER_VOLUME_DB := -10.0
 const LAYER_SILENT_DB := -60.0
+## Two buses under Master, so music and effects have their own volume (the
+## sliders in the comfort block; tester feedback 16.10.). The music sits 4 dB
+## lower than before (-9 -> -13) at full slider.
+const BUS_MUSIC := "Musik"
+const BUS_SFX := "Effekte"
+const MUSIC_DB := -13.0
 
 var _munch_toggle := false
 var _players: Array[AudioStreamPlayer] = []
@@ -107,26 +113,53 @@ func _ready() -> void:
 	_layer_good = _build_layer_good()
 	_layer_bad = _build_layer_bad()
 
+	_ensure_buses()
 	for i in range(8):
 		var p := AudioStreamPlayer.new()
-		p.bus = "Master"
+		p.bus = BUS_SFX
 		add_child(p)
 		_players.append(p)
 
 	_siren_player = AudioStreamPlayer.new()
-	_siren_player.bus = "Master"
+	_siren_player.bus = BUS_SFX
 	_siren_player.volume_db = -14.0
 	add_child(_siren_player)
 
 	_music_player = AudioStreamPlayer.new()
-	_music_player.bus = "Master"
-	_music_player.volume_db = -9.0
+	_music_player.bus = BUS_MUSIC
+	_music_player.volume_db = MUSIC_DB
 	add_child(_music_player)
 
 	_layer_player = AudioStreamPlayer.new()
-	_layer_player.bus = "Master"
+	_layer_player.bus = BUS_MUSIC
 	_layer_player.volume_db = LAYER_SILENT_DB
 	add_child(_layer_player)
+
+
+func _ensure_buses() -> void:
+	for name in [BUS_MUSIC, BUS_SFX]:
+		if AudioServer.get_bus_index(name) == -1:
+			AudioServer.add_bus()
+			var idx := AudioServer.bus_count - 1
+			AudioServer.set_bus_name(idx, name)
+			AudioServer.set_bus_send(idx, "Master")
+
+
+## Volume of a bus, linear 0..1 (0 mutes it).
+func set_bus_volume(bus_name: String, linear: float) -> void:
+	_ensure_buses()
+	var idx := AudioServer.get_bus_index(bus_name)
+	var v := clampf(linear, 0.0, 1.0)
+	AudioServer.set_bus_mute(idx, v <= 0.001)
+	AudioServer.set_bus_volume_db(idx, linear_to_db(maxf(v, 0.001)))
+
+
+func set_music_volume(linear: float) -> void:
+	set_bus_volume(BUS_MUSIC, linear)
+
+
+func set_sfx_volume(linear: float) -> void:
+	set_bus_volume(BUS_SFX, linear)
 
 
 func _free_player() -> AudioStreamPlayer:
@@ -519,52 +552,70 @@ func _chord_step(freqs: Array, beats: float) -> Dictionary:
 	return {"freqs": freqs, "beats": beats}
 
 
-## "Arcade Pac-Man style" loop: a bouncy square-wave lead over a triangle
-## bass with a light offbeat click, in a coin-op chiptune spirit — an
-## eighth-note pulse at a brisk tempo, the way the genre's own melodies
-## bounce around a I–vi–IV–V-ish progression in short repeating phrases.
-func _build_arcade_music() -> AudioStreamWAV:
-	var eighth := 0.15 # seconds per eighth-note step — a brisk ~200bpm feel
+## "Arcade Pac-Man style" loop, softened after the tester feedback of
+## 16.10. ("nicht so aggressiver Synth", "wird schnell nervig"): the lead is
+## a triangle an octave lower (no square up to C6 any more), the click a soft
+## sine, and the loop is four phrases long (19.2 s instead of 4.8 s) over the
+## same harmony — A, A with breathing rests, B in long notes, and a sparse
+## bar where only the bass carries. Each phrase is 32 eighths at 0.15 s, so
+## the condition layers (32 eighths) stay in sync (start_condition_layer).
+const ARCADE_PHRASES := 4
 
-	# Notes used below (Hz, equal temperament).
-	var C6 := 1046.50
-	var B5 := 987.77
-	var A5 := 880.00
-	var G5 := 783.99
-	var F5 := 698.46
-	var E5 := 659.25
-	var D5 := 587.33
+func _build_arcade_music() -> AudioStreamWAV:
+	var eighth := 0.15 # seconds per eighth-note step
+
+	# Notes used below (Hz, equal temperament) — one octave below the old lead.
 	var C5 := 523.25
 	var B4 := 493.88
 	var A4 := 440.00
 	var G4 := 392.00
+	var F4 := 349.23
+	var E4 := 329.63
+	var D4 := 293.66
+	var C4 := 261.63
+	var B3 := 246.94
+	var A3 := 220.00
+	var G3l := 196.00
 	var C3 := 130.81
 	var E3 := 164.81
 	var F3 := 174.61
 	var G3 := 196.00
 	var A2 := 110.00
 
-	var lead_freqs := [
-		C5, E5, G5, E5, D5, F5, A5, F5, C5, E5, G5, C6, B5, G5, E5, D5,
-		G4, B4, D5, B4, C5, E5, G5, E5, A4, C5, E5, A5, G5, E5, C5, 0.0,
+	# phrase A: the old tune, an octave down
+	var a := [
+		C4, E4, G4, E4, D4, F4, A4, F4, C4, E4, G4, C5, B4, G4, E4, D4,
+		G3l, B3, D4, B3, C4, E4, G4, E4, A3, C4, E4, A4, G4, E4, C4, 0.0,
 	]
 	var lead_steps := []
-	for f in lead_freqs:
+	for f in a:
 		lead_steps.append(_step(f, 1.0))
+	# phrase A': every fourth note rests (it breathes)
+	for k in a.size():
+		lead_steps.append(_step(0.0 if k % 4 == 3 else a[k], 1.0))
+	# phrase B: long notes on the chord tones (C Am F G Em C F G)
+	for f in [E4, C4, A3, C4, F4, A3, G4, B3, G4, E4, E4, G4, F4, A4, D4, B3]:
+		lead_steps.append(_step(f, 2.0))
+	# phrase D: sparse, a few notes, the bass carries
+	for f in [C4, 0.0, 0.0, 0.0, A3, 0.0, 0.0, 0.0, F4, 0.0, 0.0, 0.0, G4, 0.0, 0.0, 0.0]:
+		lead_steps.append(_step(f, 2.0))
 
 	var bass_freqs := [C3, C3, A2, A2, F3, F3, G3, G3, E3, E3, C3, C3, F3, F3, G3, G3]
 	var bass_steps := []
-	for f in bass_freqs:
-		bass_steps.append(_step(f, 2.0))
+	for p in ARCADE_PHRASES:
+		for f in bass_freqs:
+			bass_steps.append(_step(f, 2.0))
 
 	var hat_steps := []
-	for i in 32:
-		hat_steps.append(_step(1800.0 if i % 2 == 1 else 0.0, 1.0))
+	for p in ARCADE_PHRASES:
+		for i in 32:
+			var on: bool = i % 2 == 1 and p != 3 # no click in the sparse phrase
+			hat_steps.append(_step(1800.0 if on else 0.0, 1.0))
 
 	var voices := [
-		{"waveform": "square", "volume": 0.32, "gate": 0.72, "attack": 0.003, "release_pow": 1.4, "steps": lead_steps},
-		{"waveform": "triangle", "volume": 0.28, "gate": 0.85, "attack": 0.005, "release_pow": 1.6, "steps": bass_steps},
-		{"waveform": "square", "volume": 0.10, "gate": 0.25, "attack": 0.001, "release_pow": 3.0, "steps": hat_steps},
+		{"waveform": "triangle", "volume": 0.30, "gate": 0.7, "attack": 0.008, "release_pow": 1.6, "steps": lead_steps},
+		{"waveform": "triangle", "volume": 0.26, "gate": 0.85, "attack": 0.006, "release_pow": 1.6, "steps": bass_steps},
+		{"waveform": "sine", "volume": 0.05, "gate": 0.25, "attack": 0.002, "release_pow": 3.0, "steps": hat_steps},
 	]
 	return _compose_loop(voices, eighth)
 

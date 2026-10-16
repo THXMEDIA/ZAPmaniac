@@ -139,6 +139,13 @@ func _initialize() -> void:
 	_write(st_path, "{\"version\": 2, \"reduce_fx\": true, \"chaos\": true}")
 	var st3 := SettingsScript.load_settings()
 	_check("settings: a version-2 file loads, comfort values at their defaults", st3.reduce_fx and st3.chaos and is_equal_approx(st3.fov, 72.0) and is_equal_approx(st3.mouse_sens, 1.0) and SavePathsScript.corrupt_backups(st_path).is_empty())
+	_check("settings: an old file gets the default volumes", is_equal_approx(st3.music_vol, SettingsScript.MUSIC_VOL_DEFAULT) and is_equal_approx(st3.sfx_vol, SettingsScript.SFX_VOL_DEFAULT))
+	SettingsScript.save_settings({"music_vol": 0.25, "sfx_vol": 3.0})
+	var st4 := SettingsScript.load_settings()
+	_check("settings v5: volumes stored, clamped to 0..1", is_equal_approx(st4.music_vol, 0.25) and is_equal_approx(st4.sfx_vol, 1.0) and SettingsScript.SAVE_VERSION == 5)
+	_write(st_path, "{\"version\": 5, \"music_vol\": \"laut\"}")
+	var st5 := SettingsScript.load_settings()
+	_check("settings v5: a wrong-typed volume -> default + backup", is_equal_approx(st5.music_vol, SettingsScript.MUSIC_VOL_DEFAULT) and not SavePathsScript.corrupt_backups(st_path).is_empty())
 	_remove_backups(st_path)
 	DirAccess.remove_absolute(st_path)
 

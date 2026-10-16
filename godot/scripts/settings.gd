@@ -17,9 +17,10 @@ const SavePathsScript := preload("res://scripts/save_paths.gd")
 const SAVE_FILE := "zapmaniac_settings.json"
 ## 1: {"version", "reduce_fx"}; 2: plus "chaos"; 3: plus "fov" and
 ## "mouse_sens" (UX-K1 comfort block); 4: plus "reduce_rain" ("Regen
-## reduzieren", Tokyo M2). A missing field keeps its default, so older files
-## load unchanged.
-const SAVE_VERSION := 4
+## reduzieren", Tokyo M2); 5: plus "music_vol" and "sfx_vol" (0..1, tester
+## feedback 16.10.: the music must be adjustable). A missing field keeps its
+## default, so older files load unchanged.
+const SAVE_VERSION := 5
 ## Field of view (degrees) and mouse sensitivity (factor) — ranges of the
 ## sliders in the comfort block.
 const FOV_MIN := 60.0
@@ -32,16 +33,20 @@ const SENS_MAX := 3.0
 const MAP_FULL := 0
 const MAP_LOCAL := 1
 const MAP_OFF := 2
-const DEFAULTS := {"reduce_fx": false, "reduce_rain": false, "chaos": false, "fov": FOV_DEFAULT, "mouse_sens": 1.0}
+## Volumes, linear 0..1 (0 = silent).
+const MUSIC_VOL_DEFAULT := 0.7
+const SFX_VOL_DEFAULT := 1.0
+const DEFAULTS := {"reduce_fx": false, "reduce_rain": false, "chaos": false, "fov": FOV_DEFAULT, "mouse_sens": 1.0, "music_vol": MUSIC_VOL_DEFAULT, "sfx_vol": SFX_VOL_DEFAULT}
 const BOOL_FIELDS := ["reduce_fx", "reduce_rain", "chaos"]
-const RANGES := {"fov": [FOV_MIN, FOV_MAX], "mouse_sens": [SENS_MIN, SENS_MAX]}
+const RANGES := {"fov": [FOV_MIN, FOV_MAX], "mouse_sens": [SENS_MIN, SENS_MAX], "music_vol": [0.0, 1.0], "sfx_vol": [0.0, 1.0]}
 
 
 static func save_path() -> String:
 	return SavePathsScript.path(SAVE_FILE)
 
 
-## {"reduce_fx": bool, "reduce_rain": bool, "chaos": bool, "fov": float, "mouse_sens": float};
+## {"reduce_fx": bool, "reduce_rain": bool, "chaos": bool, "fov": float, "mouse_sens": float,
+## "music_vol": float, "sfx_vol": float};
 ## defaults for a missing file and for every broken or wrong-typed field. A
 ## file that could not be parsed or had a wrong-typed field is first kept as
 ## "<name>.corrupt-<unix time>" (W4), because the next save overwrites it.
