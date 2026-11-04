@@ -132,6 +132,15 @@ var played_ids: Array = [] # level ids cleared in this run (see Levels.draw_next
 var level_rng := RandomNumberGenerator.new()
 var ai_rng := RandomNumberGenerator.new()
 var chaos_rng_source: RandomNumberGenerator = null
+## E33: the current level's id and the states of level_rng / ai_rng at its
+## start. NEUSTART (pause) and NOCHMAL (game over) put both generators back
+## and start a fresh run on that level, so the ghosts' turns and every later
+## level draw repeat exactly. The rabbit needs nothing here: the weekly rabbit
+## comes from level id + ISO week anyway; in Chaos mode it stays random per
+## attempt (GD-N4, chaos_rng_source is not rewound).
+var restart_level_id := ""
+var restart_level_rng_state := 0
+var restart_ai_rng_state := 0
 var score := 0
 var lives := 3
 var high_score := 0
@@ -483,6 +492,7 @@ func _build_hud() -> void:
 	hud.training_pressed.connect(begin_training)
 	hud.resume_pressed.connect(_on_resume_pressed)
 	hud.restart_pressed.connect(_on_restart_pressed)
+	hud.new_level_pressed.connect(_on_new_level_pressed)
 	hud.explorer_pressed.connect(_on_explorer_pressed)
 	hud.menu_pressed.connect(go_to_main_menu)
 	hud.quit_pressed.connect(_on_quit_pressed)
@@ -505,6 +515,11 @@ func start_level(level: Dictionary) -> void:
 	hud.set_rain_option_visible(false) # no rain in the speedrun (QA K4)
 
 	_end_condition(false) # a condition never survives into the next level/attempt
+	# E33: remember where this level started (before anything draws from the
+	# generators), for NEUSTART / NOCHMAL.
+	restart_level_id = level.id
+	restart_level_rng_state = level_rng.state
+	restart_ai_rng_state = ai_rng.state
 	current_level = level
 	level_id = level.id
 	maze = MazeGen.generate_maze(level.rows, level.cols, level.seed, LevelsScript.maze_opts(level))
@@ -1377,6 +1392,7 @@ func end_game() -> void:
 		high_score = score
 		_save_highscore(high_score)
 	var level_display = _explorer_city().get("label", "EXPLORER") if playing_explorer else level_index + 1
+	hud.set_new_level_visible(is_speedrun()) # E33
 	hud.set_game_hud_visible(false)
 	hud.show_gameover(score, level_display, high_score, chat_blocked)
 	hud.set_bonus_unlocked(Speedrun.is_bonus_unlocked())
@@ -1522,7 +1538,39 @@ func _on_restart_pressed() -> void:
 	elif training_mode and level_id != "":
 		begin_training(level_id)
 	else:
+		restart_same_level()
+
+
+## E33 (GD-K1): NEUSTART / NOCHMAL in the speedrun — a fresh run (score,
+## lives, level count back to the start) on the level that was being played,
+## with level_rng and ai_rng as they were at its start.
+func restart_same_level() -> void:
+	if restart_level_id == "" or LevelsScript.by_id(restart_level_id).is_empty():
 		begin_game()
+		return
+	level_rng.state = restart_level_rng_state
+	ai_rng.state = restart_ai_rng_state
+	begin_game(restart_level_id)
+
+
+## E33: NEUES LEVEL (pause, game over; speedrun only) — a fresh run on a level
+## other than the current one, drawn from level_rng (reproducible with a
+## fixed seed).
+func _on_new_level_pressed() -> void:
+	if not is_speedrun():
+		return
+	hud.hide_all_panels()
+	var current := restart_level_id if restart_level_id != "" else level_id
+	var next: Dictionary = LevelsScript.draw_next([current], current, level_rng)
+	if next.id == current:
+		push_warning("NEUES LEVEL: the pool has no other level than '%s'" % current)
+	begin_game(next.id)
+
+
+## A solo speedrun run (not Explorer, Training or Versus) — the only mode with
+## NEUES LEVEL and the NEUSTART question (E33).
+func is_speedrun() -> bool:
+	return not playing_explorer and not training_mode and not (versus != null and versus.active)
 
 
 func toggle_pause() -> void:
@@ -1545,6 +1593,9 @@ func toggle_pause() -> void:
 		hud.set_reduce_fx(reduce_fx)
 		hud.set_comfort(fov, mouse_sens)
 		hud.set_menu_confirm(not playing_explorer) # UX-K2: abandoning a speedrun asks once
+		# E33 / UX-W4: NEUSTART / NEUES LEVEL ask once the run is past level 1.
+		hud.set_restart_confirm(is_speedrun() and level_index > 0)
+		hud.set_new_level_visible(is_speedrun())
 		hud.show_only(hud.pause_panel)
 		Sfx.set_siren(false, false)
 		Input.set_mouse_mode(Input.MOUSE_MODE_VISIBLE)

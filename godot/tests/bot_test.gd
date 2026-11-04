@@ -55,6 +55,7 @@ func _ready() -> void:
 	await _run_movement_checks()
 	await _run_split_checks()
 	await _run_map_mode_checks()
+	await _run_e33_restart_checks()
 
 	_check("test isolation: Speedrun saves under the test folder", Speedrun.save_path().begins_with(SaveIsolation.SavePathsScript.TEST_ROOT), Speedrun.save_path())
 	_check("test isolation: Leaderboard saves under the test folder", Leaderboard.save_path().begins_with(SaveIsolation.SavePathsScript.TEST_ROOT), Leaderboard.save_path())
@@ -2000,6 +2001,7 @@ func _run_review_fix_checks() -> void:
 	main.toggle_pause()
 	var pause_texts := _texts_of(main.hud.pause_panel)
 	_check("UX-K2: pause offers WEITER / NEUSTART / HAUPTMENÜ", pause_texts.has("WEITER") and pause_texts.has("NEUSTART") and pause_texts.has("HAUPTMENÜ"))
+	_check("UX-K2/E33: the speedrun pause also offers NEUES LEVEL, styled like NEUSTART", pause_texts.has("NEUES LEVEL") and main.hud.pause_new_level_btn.visible and main.hud.pause_new_level_btn.custom_minimum_size == main.hud.pause_restart_btn.custom_minimum_size)
 	main.hud.menu_btn.pressed.emit()
 	_check("UX-K2: HAUPTMENÜ in a speedrun asks first", main.hud.is_menu_confirm_open() and main.running)
 	_esc()
@@ -2014,6 +2016,7 @@ func _run_review_fix_checks() -> void:
 	main.end_game()
 	var go_texts := _texts_of(main.hud.gameover_panel)
 	_check("UX-K2: game over offers NOCHMAL / HAUPTMENÜ / BESTENLISTE", go_texts.has("NOCHMAL") and go_texts.has("HAUPTMENÜ") and go_texts.has("BESTENLISTE"))
+	_check("UX-K2/E33: a speedrun game over also offers NEUES LEVEL, styled like NOCHMAL", go_texts.has("NEUES LEVEL") and main.hud.gameover_new_level_btn.visible and main.hud.gameover_new_level_btn.custom_minimum_size == main.hud.gameover_restart_btn.custom_minimum_size)
 	_check("UX-W5: no game HUD over the game over", not main.hud.is_game_hud_visible())
 	main.hud.show_leaderboard("", "", main.hud.gameover_panel)
 	_esc()
@@ -2343,6 +2346,208 @@ func _run_movement_checks() -> void:
 	main.toggle_pause()
 	main.end_game()
 	main.go_to_main_menu()
+
+
+## ---------------- E33: NEUSTART / NOCHMAL keep the level, NEUES LEVEL ----------------
+
+func _maze_signature() -> String:
+	var rows := []
+	for row in main.maze.grid:
+		rows.append("".join(row.map(func(v): return str(v))))
+	return "|".join(rows)
+
+
+## Everything a reproducible restart has to bring back.
+func _level_snapshot() -> Dictionary:
+	return {
+		"id": main.level_id,
+		"maze": _maze_signature(),
+		"start": main.start_cell,
+		"level_rng": main.level_rng.state,
+		"ai_rng": main.ai_rng.state,
+		"rabbit": main.rabbit_rng.state if main.rabbit_rng != null else -1,
+	}
+
+
+func _same_level(a: Dictionary, b: Dictionary) -> bool:
+	return a.id == b.id and a.maze == b.maze and a.start == b.start and a.level_rng == b.level_rng and a.ai_rng == b.ai_rng
+
+
+## Plays a bit of a level: generators move on, score changes.
+func _play_a_little() -> void:
+	main.level_rng.randi()
+	main.ai_rng.randi()
+	main.score += 120
+	await get_tree().process_frame
+
+
+func _run_e33_restart_checks() -> void:
+	var hud = main.hud
+	var was_chaos: bool = main.chaos_mode
+	main.set_chaos_mode(false)
+	main.seed_randomness(3333)
+
+	# ---- NEUSTART in level 1: no question, same level, generators rewound ----
+	main.begin_game("klassik-2")
+	await get_tree().process_frame
+	var lv1 := _level_snapshot()
+	await _play_a_little()
+	main.toggle_pause()
+	_check("E33: the speedrun pause shows NEUES LEVEL", hud.pause_new_level_btn.visible)
+	hud.pause_restart_btn.pressed.emit()
+	await get_tree().process_frame
+	_check("E33/UX-W4: NEUSTART in the first level asks nothing", not hud.is_menu_confirm_open())
+	var after := _level_snapshot()
+	_check("E33: NEUSTART keeps level id, maze, start cell and the level_rng/ai_rng states", _same_level(lv1, after), "%s -> %s" % [lv1.id, after.id])
+	_check("E33: NEUSTART keeps the weekly rabbit (level id + week)", lv1.rabbit == after.rabbit)
+	_check("E33: NEUSTART is a fresh run (score 0, 3 lives, level 1, running)", main.score == 0 and main.lives == 3 and main.level_index == 0 and main.running and not main.paused)
+
+	# ---- NEUSTART past level 1: asks first (UX-W4), Esc/NEIN cancel ----
+	main.next_level()
+	await get_tree().process_frame
+	var lv2 := _level_snapshot()
+	_check("E33: the second level of the run is another level", lv2.id != lv1.id)
+	await _play_a_little()
+	main.toggle_pause()
+	hud.pause_restart_btn.pressed.emit()
+	await get_tree().process_frame
+	_check("E33/UX-W4: NEUSTART in level 2 asks first, the run goes on", hud.is_menu_confirm_open() and hud.confirm_action() == "restart" and main.running and main.level_index == 1)
+	_check("E33/UX-W4: the question is German and names the restart", hud.pause_confirm_q.text.begins_with("Lauf neu starten?") and hud.pause_confirm_yes.text == "JA, NEUSTART")
+	_check("E33/UX-W4: keyboard/controller focus lands on NEIN", hud.pause_confirm_no.has_focus())
+	_esc()
+	_check("E33/UX-W4: Esc cancels the question, the pause stays", not hud.is_menu_confirm_open() and main.paused and hud.pause_panel.visible and main.level_index == 1)
+	hud.pause_restart_btn.pressed.emit()
+	hud.pause_confirm_no.pressed.emit()
+	_check("E33/UX-W4: NEIN cancels too", not hud.is_menu_confirm_open() and main.paused and main.level_index == 1)
+	hud.pause_restart_btn.pressed.emit()
+	hud.menu_btn.pressed.emit()
+	_check("E33/UX-W4: HAUPTMENÜ while the NEUSTART question is open switches the question", hud.confirm_action() == "menu" and hud.pause_confirm_yes.text == "JA, ZUM MENÜ" and main.running)
+	hud.pause_restart_btn.pressed.emit()
+	hud.pause_confirm_yes.pressed.emit()
+	await get_tree().process_frame
+	after = _level_snapshot()
+	_check("E33: confirmed NEUSTART restarts level 2 itself, generators rewound", _same_level(lv2, after), "%s -> %s" % [lv2.id, after.id])
+	_check("E33: confirmed NEUSTART is a fresh run", main.score == 0 and main.lives == 3 and main.level_index == 0 and main.running and not main.paused and not hud.pause_panel.visible)
+	main.next_level()
+	await get_tree().process_frame
+	main.toggle_pause()
+	hud.pause_restart_btn.pressed.emit()
+	hud.pause_restart_btn.pressed.emit()
+	await get_tree().process_frame
+	_check("E33/UX-W4: pressing NEUSTART again confirms (like HAUPTMENÜ)", main.level_index == 0 and main.running and not main.paused)
+
+	# ---- NOCHMAL: the level of the death, no question ----
+	main.next_level()
+	await get_tree().process_frame
+	var died := _level_snapshot()
+	await _play_a_little()
+	main.end_game()
+	_check("E33: the speedrun game over shows NEUES LEVEL", hud.gameover_new_level_btn.visible)
+	hud.gameover_restart_btn.pressed.emit()
+	await get_tree().process_frame
+	after = _level_snapshot()
+	_check("E33: NOCHMAL restarts the level of the death without a question", _same_level(died, after) and not hud.is_menu_confirm_open() and main.running, "%s -> %s" % [died.id, after.id])
+	_check("E33: NOCHMAL is a fresh run", main.score == 0 and main.lives == 3 and main.level_index == 0)
+
+	# ---- the rewound level_rng repeats the later level draws too: the level
+	# after this one is the one its start state draws, however much the
+	# attempt before the NEUSTART consumed ----
+	var copy := RandomNumberGenerator.new()
+	copy.state = main.level_rng.state
+	var next_a: String = LevelsScript.draw_next([], main.level_id, copy).id
+	await _play_a_little()
+	await _play_a_little()
+	main.toggle_pause()
+	hud.pause_restart_btn.pressed.emit()
+	await get_tree().process_frame
+	main.next_level()
+	_check("E33: after NEUSTART the next level is drawn as from the level's start", main.level_id == next_a, "%s vs %s" % [main.level_id, next_a])
+
+	# ---- NEUES LEVEL: another level, reproducible with a fixed seed ----
+	main.seed_randomness(9001)
+	main.begin_game("offen")
+	await get_tree().process_frame
+	main.end_game()
+	hud.gameover_new_level_btn.pressed.emit()
+	await get_tree().process_frame
+	var nl_a: String = main.level_id
+	_check("E33: NEUES LEVEL (game over) starts a fresh run on another level, no question", nl_a != "offen" and main.running and main.level_index == 0 and main.score == 0 and not hud.is_menu_confirm_open(), nl_a)
+	main.seed_randomness(9001)
+	main.begin_game("offen")
+	await get_tree().process_frame
+	main.end_game()
+	hud.gameover_new_level_btn.pressed.emit()
+	await get_tree().process_frame
+	_check("E33: NEUES LEVEL is reproducible with a fixed seed", main.level_id == nl_a, "%s vs %s" % [main.level_id, nl_a])
+	var always_other := true
+	for i in 30:
+		var before: String = main.level_id
+		main.toggle_pause()
+		hud.pause_new_level_btn.pressed.emit()
+		if main.level_id == before or main.paused:
+			always_other = false
+	_check("E33: NEUES LEVEL in the first level: no question, always another level (30 draws)", always_other)
+	main.next_level()
+	await get_tree().process_frame
+	var lvl2_id: String = main.level_id
+	main.toggle_pause()
+	hud.pause_new_level_btn.pressed.emit()
+	_check("E33/UX-W4: NEUES LEVEL in level 2 asks first", hud.confirm_action() == "new_level" and hud.pause_confirm_yes.text == "JA, NEUES LEVEL" and main.level_index == 1)
+	hud.pause_confirm_yes.pressed.emit()
+	await get_tree().process_frame
+	_check("E33: confirmed NEUES LEVEL -> fresh run on another level", main.level_id != lvl2_id and main.level_index == 0 and main.running and not main.paused)
+
+	# ---- Chaos mode: the level stays, the rabbit may differ (GD-N4) ----
+	main.set_chaos_mode(true)
+	main.begin_game("klassik-3")
+	await get_tree().process_frame
+	var ch := _level_snapshot()
+	main.toggle_pause()
+	hud.pause_restart_btn.pressed.emit()
+	await get_tree().process_frame
+	_check("E33: Chaos mode NEUSTART keeps the level and generators (rabbit stays random per attempt, GD-N4)", _same_level(ch, _level_snapshot()))
+	main.set_chaos_mode(false)
+
+	# ---- no NEUES LEVEL in Training, Explorer, Versus ----
+	main.begin_training("klassik-1")
+	await get_tree().process_frame
+	main.toggle_pause()
+	_check("E33: no NEUES LEVEL in the Training pause", not hud.pause_new_level_btn.visible and hud.pause_restart_btn.visible)
+	main.toggle_pause()
+	main.end_game()
+	_check("E33: no NEUES LEVEL on the Training game over", not hud.gameover_new_level_btn.visible)
+	hud.gameover_restart_btn.pressed.emit()
+	await get_tree().process_frame
+	_check("E33: NOCHMAL in Training repeats the training level", main.training_mode and main.level_id == "klassik-1" and main.running)
+	hud.new_level_pressed.emit()
+	_check("E33: NEUES LEVEL is ignored in Training", main.training_mode and main.level_id == "klassik-1")
+
+	main.begin_explorer_game("manhattan")
+	await get_tree().process_frame
+	main.toggle_pause()
+	_check("E33: no NEUES LEVEL in the Explorer pause", not hud.pause_new_level_btn.visible)
+	hud.pause_restart_btn.pressed.emit()
+	await get_tree().process_frame
+	_check("E33: Explorer NEUSTART still restarts the city, no question", main.playing_explorer and main.explorer_city_id == "manhattan" and main.running and not hud.is_menu_confirm_open())
+
+	main.begin_game("klassik-1")
+	await get_tree().process_frame
+	main.next_level()
+	main.versus.active = true
+	main.toggle_pause()
+	_check("E33: Versus pause unchanged: no NEUSTART, no NEUES LEVEL, MATCH AUFGEBEN", not hud.pause_new_level_btn.visible and not hud.pause_restart_btn.visible and hud.menu_btn.text == "MATCH AUFGEBEN")
+	hud.menu_btn.pressed.emit()
+	_check("E33: Versus question text unchanged", hud.pause_confirm_q.text.begins_with("Match aufgeben?") and hud.pause_confirm_yes.text == "JA, AUFGEBEN")
+	hud.cancel_menu_confirm()
+	main.toggle_pause()
+	main.versus.active = false
+	main.toggle_pause()
+	_check("E33: after Versus the speedrun pause is back (NEUSTART, NEUES LEVEL, HAUPTMENÜ)", hud.pause_restart_btn.visible and hud.pause_new_level_btn.visible and hud.menu_btn.text == "HAUPTMENÜ")
+	main.toggle_pause()
+
+	main.go_to_main_menu()
+	main.set_chaos_mode(was_chaos)
+	main.seed_randomness(4242)
 
 
 func _labels_under(node: Node) -> Array:
