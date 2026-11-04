@@ -1840,6 +1840,44 @@ func _run_review_fix_checks() -> void:
 		DirAccess.remove_absolute(b)
 	main._save_highscore(main.high_score)
 
+	# ---- Code-K1: Main reports failed saves, the old files stay ----
+	var hs_before := FileAccess.get_file_as_string(hs_path)
+	main.hud.hide_hint()
+	main.begin_game("klassik-1")
+	await get_tree().process_frame
+	main.score = main.high_score + 1000
+	SettingsScript.SavePathsScript.fail_all_writes = true
+	main.end_game()
+	SettingsScript.SavePathsScript.fail_all_writes = false
+	_check("K1: a failed high-score save keeps the old file", FileAccess.get_file_as_string(hs_path) == hs_before, FileAccess.get_file_as_string(hs_path))
+	_check("K1: ... and shows the HUD hint", main.hud.hint_text() == main.SAVE_FAILED_TEXT, main.hud.hint_text())
+	_check("K1: _save_highscore returns true again once writing works", main._save_highscore(main.high_score) and main._load_highscore() == main.high_score)
+	main.hud.hide_hint()
+	var st_path_k1: String = SettingsScript.save_path()
+	var st_before_k1 := FileAccess.get_file_as_string(st_path_k1) if FileAccess.file_exists(st_path_k1) else "<missing>"
+	SettingsScript.SavePathsScript.fail_all_writes = true
+	var st_ok: bool = main._save_settings()
+	SettingsScript.SavePathsScript.fail_all_writes = false
+	var st_after_k1 := FileAccess.get_file_as_string(st_path_k1) if FileAccess.file_exists(st_path_k1) else "<missing>"
+	_check("K1: a failed settings save returns false, keeps the file, shows the hint", not st_ok and st_after_k1 == st_before_k1 and main.hud.hint_text() == main.SAVE_FAILED_TEXT)
+	main.hud.hide_hint()
+	# level clear: best time and board are not written, the banner says so
+	main.begin_game("klassik-1")
+	await get_tree().process_frame
+	await get_tree().create_timer(0.2).timeout
+	var sr_file_k1: String = Speedrun.save_path()
+	var lb_file_k1: String = Leaderboard.save_path()
+	var sr_before_k1 := FileAccess.get_file_as_string(sr_file_k1) if FileAccess.file_exists(sr_file_k1) else "<missing>"
+	var lb_before_k1 := FileAccess.get_file_as_string(lb_file_k1) if FileAccess.file_exists(lb_file_k1) else "<missing>"
+	SettingsScript.SavePathsScript.fail_all_writes = true
+	main.level_complete_sequence()
+	SettingsScript.SavePathsScript.fail_all_writes = false
+	var sr_after_k1 := FileAccess.get_file_as_string(sr_file_k1) if FileAccess.file_exists(sr_file_k1) else "<missing>"
+	var lb_after_k1 := FileAccess.get_file_as_string(lb_file_k1) if FileAccess.file_exists(lb_file_k1) else "<missing>"
+	_check("K1: a failed save at level clear keeps both files", sr_after_k1 == sr_before_k1 and lb_after_k1 == lb_before_k1)
+	_check("K1: ... and the banner says the save failed", main.hud.levelclear_sub.text.find(main.SAVE_FAILED_TEXT) != -1, main.hud.levelclear_sub.text)
+	await get_tree().create_timer(2.4).timeout
+
 	# ---- N1: Matrix ending inside the ghost house -> out of the house ----
 	main.begin_game("klassik-1")
 	await get_tree().process_frame

@@ -79,11 +79,16 @@ static func load_settings() -> Dictionary:
 
 
 ## Writes every setting; fields missing in `values` get their default.
-static func save_settings(values: Dictionary) -> void:
+## Returns false (and logs an error) when the file could not be written; the
+## old file then stays exactly as it was (Code-K1).
+static func save_settings(values: Dictionary) -> bool:
 	var payload := {"version": SAVE_VERSION}
 	for k in DEFAULTS:
 		if k in BOOL_FIELDS:
 			payload[k] = bool(values.get(k, DEFAULTS[k]))
 		else:
 			payload[k] = clampf(float(values.get(k, DEFAULTS[k])), RANGES[k][0], RANGES[k][1])
-	SavePathsScript.write_atomic(save_path(), JSON.stringify(payload))
+	if SavePathsScript.write_atomic(save_path(), JSON.stringify(payload)):
+		return true
+	push_error("Settings: could not write %s — the file keeps its previous state" % save_path())
+	return false

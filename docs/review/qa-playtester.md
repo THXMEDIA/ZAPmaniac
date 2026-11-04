@@ -2,7 +2,7 @@
 
 - Godot 4.3 (siehe `godot/project.godot`). Binärdatei: `https://github.com/godotengine/godot/releases/download/4.3-stable/Godot_v4.3-stable_linux.x86_64.zip`
 - Vor den Tests einmal `godot --headless --path godot --import`.
-- Tests: alle `godot/tests/test_*.gd` einzeln mit `--script`, dazu die Bot-Simulation `res://tests/BotTest.tscn` (Stand 05.10.2026 auf `feature/explorer-arles` nach den Städte-Reviews: 24 Testskripte mit zusammen 1 165 Checks – darunter `test_amsterdam` 117, `test_arles` 96, `test_kyoto` 55 – und 496 Simulations-Checks grün; Reihenfolge wie `npm run test:godot`).
+- Tests: alle `godot/tests/test_*.gd` einzeln mit `--script`, dazu die Bot-Simulation `res://tests/BotTest.tscn` (Stand 04.11.2026 auf `fix/code-k1`: 24 Testskripte mit zusammen 1 289 Checks – darunter `test_amsterdam` 139, `test_arles` 123, `test_kyoto` 94, `test_save_safety` 41 – und 558 Simulations-Checks grün; Reihenfolge wie `npm run test:godot`). Unit-Tests und Bot-Simulation **nacheinander** starten, nicht parallel: sie teilen den Testordner `user://test_saves`, ein paralleler Lauf erzeugt falsche Speicher-Fehlschläge. Schreibfehler testen: `SavePaths.simulate_write_failure` (nächster Schreibvorgang) oder `SavePaths.fail_all_writes` (alle, bis zurückgesetzt).
 - Screenshots (Aufruf jeweils im Dateikopf; Skript nach `godot/` kopieren, unter `xvfb-run` mit `--rendering-driver opengl3` starten, `SHOT_DIR` setzen):
   - `tools/qa/qa_screenshots.gd`: Startmenü, Speedrun-Level, Pause, Manhattan.
   - `tools/qa/qa_kaninchen_shots.gd`: Start-Einblendung, Kaninchen, Titelkarte, alle Konditions-Looks (Etappe 2).

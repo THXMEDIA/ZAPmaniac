@@ -2,7 +2,10 @@ extends SceneTree
 ## Headless test (W4, 03.10. review): broken or wrong-typed save files are
 ## kept as "<name>.corrupt-<unix time>" before the game writes over them, and
 ## SavePaths.write_atomic leaves its target untouched when a write fails.
-## Covers Speedrun, Leaderboard, Settings and the high score. Run with
+## Covers Speedrun, Leaderboard, Settings and the high score. Code-K1: every
+## caller of write_atomic reports a failed write and keeps the old file (also
+## an older version that was migrated in memory); Main's high score and HUD
+## hint are checked in the bot simulation (bot_test.gd). Run with
 ##   godot --headless --path . --script res://tests/test_save_safety.gd
 ## Exits with code 0 on success, 1 on any failure. Works in its own save
 ## folder (SaveIsolation); the real saves are checked to stay unchanged.
@@ -151,6 +154,9 @@ func _initialize() -> void:
 	_remove_backups(p)
 	DirAccess.remove_absolute(p)
 
+	# ---- Code-K1: every caller reports a failed write, the old file stays ----
+	_k1_checks(speedrun_script, leaderboard_script)
+
 	_check("test isolation: real save files unchanged", SaveIsolation.end(real_saves))
 	print("")
 	if failures == 0:
@@ -159,3 +165,88 @@ func _initialize() -> void:
 	else:
 		print("%d/%d SAVE SAFETY CHECKS FAILED" % [failures, checks])
 		quit(1)
+
+
+func _k1_checks(speedrun_script, leaderboard_script) -> void:
+	# Speedrun: a new best time whose save fails
+	var sr_path := SavePathsScript.path("zapmaniac_speedrun.json")
+	var sr_before := JSON.stringify({"version": 5, "best_times": {"klassik-1|woche|solo": {"time": 150.0, "week": "2026-W40"}}, "bonus_unlocked": false})
+	_write(sr_path, sr_before)
+	var sr = speedrun_script.new()
+	sr.reload()
+	SavePathsScript.simulate_write_failure = true
+	var r: Dictionary = sr.record_level_time("klassik-1", 120.0, "woche", "solo", "2026-W40")
+	_check("K1 speedrun: a failed save is reported (saved=false, last_save_ok=false)", r.has("saved") and r.saved == false and sr.last_save_ok == false, str(r))
+	_check("K1 speedrun: a failed save leaves the file as it was", _read(sr_path) == sr_before, _read(sr_path))
+	_check("K1 speedrun: no .tmp left behind", not FileAccess.file_exists(sr_path + ".tmp"))
+	_check("K1 speedrun: the result still names the new best (session only)", r.is_new_best and sr.best_for("klassik-1") == 120.0)
+	r = sr.record_level_time("klassik-2", 140.0, "woche", "solo", "2026-W40")
+	sr.reload()
+	_check("K1 speedrun: the next good save writes everything, flag back to true", r.saved == true and sr.last_save_ok and sr.best_for("klassik-1") == 120.0 and sr.best_for("klassik-2") == 140.0)
+	_check("K1 speedrun: nothing to save -> saved=true", sr.record_level_time("klassik-2", 999.0, "woche", "solo", "2026-W40").saved == true)
+	sr.reset_all()
+	# Speedrun: an older file migrated in memory stays on disk unchanged
+	var sr_old := JSON.stringify({"version": 4, "best_times": {"klassik-1|woche|solo": {"time": 150.0, "week": "2026-W40"}}})
+	_write(sr_path, sr_old)
+	sr.reload()
+	SavePathsScript.simulate_write_failure = true
+	r = sr.record_level_time("klassik-3", 160.0, "woche", "solo", "2026-W40")
+	_check("K1 speedrun migration: failed save -> the old version-4 file is untouched", r.saved == false and _read(sr_path) == sr_old, _read(sr_path))
+	r = sr.record_level_time("klassik-4", 170.0, "woche", "solo", "2026-W40")
+	var sr_after = JSON.parse_string(_read(sr_path))
+	_check("K1 speedrun migration: the next good save writes the new version", r.saved and typeof(sr_after) == TYPE_DICTIONARY and int(sr_after.get("version", 0)) == speedrun_script.SAVE_VERSION)
+	sr.reset_all()
+	_remove_backups(sr_path)
+	sr.free()
+
+	# Leaderboard: a submitted time whose save fails
+	var lb_path := SavePathsScript.path("zapmaniac_leaderboards.json")
+	var lb_before := JSON.stringify({"version": 5, "boards": {"klassik-1|woche|solo": [{"name": "Player", "time": 130.0, "week": "2026-W40", "cond": "", "date": "2026-10-01"}]}})
+	_write(lb_path, lb_before)
+	var lb = leaderboard_script.new()
+	lb.reload()
+	SavePathsScript.simulate_write_failure = true
+	var s: Dictionary = lb.submit_time("klassik-1", "woche", 110.0, "Player", "solo", "2026-W40", "")
+	_check("K1 leaderboard: a failed save is reported (saved=false, last_save_ok=false)", s.has("saved") and s.saved == false and lb.last_save_ok == false, str(s))
+	_check("K1 leaderboard: a failed save leaves the file as it was", _read(lb_path) == lb_before, _read(lb_path))
+	_check("K1 leaderboard: no .tmp left behind", not FileAccess.file_exists(lb_path + ".tmp"))
+	s = lb.submit_time("klassik-1", "woche", 115.0, "Player", "solo", "2026-W40", "")
+	lb.reload()
+	_check("K1 leaderboard: the next good save writes both entries", s.saved and lb.last_save_ok and lb.get_top("klassik-1", "woche").size() == 3)
+	# an older file (rules version 2 boards move to the archive on load)
+	var lb_old := JSON.stringify({"version": 4, "boards": {"klassik-1|woche|solo": [{"name": "Player", "time": 90.0, "week": "2026-W39"}]}})
+	_write(lb_path, lb_old)
+	lb.reload()
+	SavePathsScript.simulate_write_failure = true
+	s = lb.submit_time("klassik-2", "woche", 140.0, "Player", "solo", "2026-W40", "")
+	_check("K1 leaderboard migration: failed save -> the old version-4 file is untouched", s.saved == false and _read(lb_path) == lb_old, _read(lb_path))
+	s = lb.submit_time("klassik-2", "woche", 141.0, "Player", "solo", "2026-W40", "")
+	var lb_after = JSON.parse_string(_read(lb_path))
+	_check("K1 leaderboard migration: the next good save writes the new version with the archive", s.saved and typeof(lb_after) == TYPE_DICTIONARY and int(lb_after.get("version", 0)) == leaderboard_script.SAVE_VERSION and not (lb_after.get("archive", {}) as Dictionary).is_empty())
+	lb.reset_all()
+	_remove_backups(lb_path)
+	lb.free()
+
+	# Settings: hook and a real file-system failure (a directory blocks the .tmp)
+	var st_path := SettingsScript.save_path()
+	var st_before := "{\"version\": 4, \"reduce_fx\": false, \"reduce_rain\": false, \"chaos\": false, \"fov\": 72.0, \"mouse_sens\": 1.0}"
+	_write(st_path, st_before)
+	SavePathsScript.simulate_write_failure = true
+	var ok := SettingsScript.save_settings({"reduce_fx": true})
+	_check("K1 settings: a failed save returns false and leaves the file as it was", not ok and _read(st_path) == st_before, _read(st_path))
+	DirAccess.make_dir_absolute(st_path + ".tmp")
+	ok = SettingsScript.save_settings({"chaos": true})
+	_check("K1 settings: .tmp not writable -> false, file as it was", not ok and _read(st_path) == st_before and SettingsScript.load_settings().chaos == false)
+	DirAccess.remove_absolute(st_path + ".tmp")
+	ok = SettingsScript.save_settings({"chaos": true})
+	_check("K1 settings: the next good save works again", ok and SettingsScript.load_settings().chaos == true)
+	DirAccess.remove_absolute(st_path)
+
+	# the persistent hook fails every write until it is switched off
+	SavePathsScript.fail_all_writes = true
+	var t := SavePathsScript.path("k1_twice.json")
+	var a := SavePathsScript.write_atomic(t, "1")
+	var b := SavePathsScript.write_atomic(t, "2")
+	SavePathsScript.fail_all_writes = false
+	_check("K1 hook: fail_all_writes fails every write until switched off", not a and not b and not FileAccess.file_exists(t) and SavePathsScript.write_atomic(t, "3"))
+	DirAccess.remove_absolute(t)

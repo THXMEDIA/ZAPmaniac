@@ -57,6 +57,9 @@ var archive: Dictionary = {}
 var loaded_version := 0
 var _loaded := false
 var _read_only := false
+## Code-K1: false after the last save could not be written (the file keeps
+## the state of the last successful save; see Speedrun.last_save_ok).
+var last_save_ok := true
 ## Tests: the date stored with new entries ("" = today, local time).
 var date_override := ""
 
@@ -114,14 +117,14 @@ func submit_time(level_id: String, board: String, time_seconds: float, player_na
 	if entries.size() > MAX_ENTRIES_PER_BOARD:
 		entries.resize(MAX_ENTRIES_PER_BOARD)
 	_boards[key] = entries
-	_save()
+	var saved := _save()
 
 	var rank := -1
 	for i in entries.size():
 		if entries[i].name == player_name and is_equal_approx(entries[i].time, time_seconds):
 			rank = i + 1
 			break
-	return {"rank": rank, "is_new_best": is_new_best}
+	return {"rank": rank, "is_new_best": is_new_best, "saved": saved}
 
 
 ## Top `n` entries for a board, fastest first. Each entry: {name, time,
@@ -326,10 +329,17 @@ static func migrate_key(key: String, version: int) -> String:
 	return LevelsScript.migrate_v2_key(k)
 
 
-func _save() -> void:
+## Writes all boards. Returns false (and logs an error) when the file could
+## not be written; the old file — also an older version whose boards were
+## moved to the archive in memory on load — stays exactly as it was
+## (Code-K1). A read-only (newer) file counts as nothing to write.
+func _save() -> bool:
 	if _read_only:
-		return
+		return true
 	var payload := {"version": SAVE_VERSION, "boards": _boards}
 	if not archive.is_empty():
 		payload["archive"] = archive
-	SavePathsScript.write_atomic(save_path(), JSON.stringify(payload))
+	last_save_ok = SavePathsScript.write_atomic(save_path(), JSON.stringify(payload))
+	if not last_save_ok:
+		push_error("Leaderboard: could not write %s — the file keeps its previous state" % save_path())
+	return last_save_ok

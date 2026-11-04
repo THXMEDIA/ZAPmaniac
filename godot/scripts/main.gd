@@ -28,6 +28,9 @@ const MATRIX_BLINK_HZ := 1.5
 ## evaded by backing off into a side passage, or run into.
 const ENEMY_HIT_RADIUS := 0.85
 const HIGHSCORE_FILE := "zapmaniac_highscore.txt" # under SavePaths.root (tests redirect it)
+## Code-K1: shown when a save file could not be written.
+const SAVE_FAILED_TEXT := "Speichern fehlgeschlagen"
+const SAVE_FAILED_HINT_S := 4.0
 ## Code-W8: global cooldown (game clock) for each helping chat command. 20 s
 ## is about three Frightened windows (FRIGHTENED_DURATION 7 s): chat !power
 ## can never chain Frightened back to back or keep resetting the eat combo,
@@ -1133,8 +1136,11 @@ func set_chaos_mode(on: bool) -> void:
 	hud.set_chaos_mode(on)
 
 
-func _save_settings() -> void:
-	SettingsScript.save_settings({"reduce_fx": reduce_fx, "reduce_rain": reduce_rain, "chaos": chaos_mode, "fov": fov, "mouse_sens": mouse_sens})
+func _save_settings() -> bool:
+	var ok := SettingsScript.save_settings({"reduce_fx": reduce_fx, "reduce_rain": reduce_rain, "chaos": chaos_mode, "fov": fov, "mouse_sens": mouse_sens})
+	if not ok:
+		_report_save_failure()
+	return ok
 
 
 ## ---------------- speedrun start: intro and hold (spec 2.1) ----------------
@@ -1375,7 +1381,8 @@ func end_game() -> void:
 	var chat_blocked := run_chat_assisted and score > high_score and not training_mode
 	if score > high_score and not run_chat_assisted and not training_mode:
 		high_score = score
-		_save_highscore(high_score)
+		if not _save_highscore(high_score):
+			_report_save_failure()
 	var level_display = _explorer_city().get("label", "EXPLORER") if playing_explorer else level_index + 1
 	hud.set_game_hud_visible(false)
 	hud.show_gameover(score, level_display, high_score, chat_blocked)
@@ -1465,8 +1472,10 @@ func level_complete_sequence() -> void:
 	if not training_mode:
 		result = Speedrun.record_level_time(cleared_id, elapsed, board, mode, week, level_splits if level_splits.size() == Speedrun.SPLIT_MARKS.size() else [])
 	var player_name: String = versus.player_name() if versus != null and versus.active else Leaderboard.DEFAULT_PLAYER_NAME
+	var saved := true
 	if not training_mode:
-		Leaderboard.submit_time(cleared_id, board, elapsed, player_name, mode, week, level_condition_id)
+		saved = bool(result.get("saved", true))
+		saved = bool(Leaderboard.submit_time(cleared_id, board, elapsed, player_name, mode, week, level_condition_id).get("saved", true)) and saved
 	played_ids.append(cleared_id)
 	var subtitle := "%s  ·  Zeit %s" % [cleared_name, Speedrun.format_time(elapsed)]
 	if training_mode:
@@ -1481,6 +1490,12 @@ func level_complete_sequence() -> void:
 		subtitle += "  ·  neue Bestzeit!"
 	elif result.beat_target:
 		subtitle += "  ·  unter Zielzeit " + Speedrun.format_time(result.target)
+	if not saved:
+		# Code-K1: the time counts for this session, but the files keep their
+		# old state — say so instead of pretending it was stored.
+		subtitle += "  ·  " + SAVE_FAILED_TEXT
+		if versus != null and versus.active:
+			_report_save_failure()
 	_refresh_board_hud()
 
 	if versus != null and versus.active:
@@ -2141,5 +2156,18 @@ func _load_highscore() -> int:
 	return v.to_int()
 
 
-func _save_highscore(v: int) -> void:
-	SavePathsScript.write_atomic(SavePathsScript.path(HIGHSCORE_FILE), str(v))
+## Code-K1: false (and an error in the log) when the file could not be
+## written; the old high score file then stays exactly as it was.
+func _save_highscore(v: int) -> bool:
+	var path: String = SavePathsScript.path(HIGHSCORE_FILE)
+	if SavePathsScript.write_atomic(path, str(v)):
+		return true
+	push_error("Main: could not write %s — the file keeps its previous state" % path)
+	return false
+
+
+## Code-K1: a short HUD hint after a save that could not be written (the
+## detailed error is already in the log).
+func _report_save_failure() -> void:
+	if hud != null:
+		hud.show_hint(SAVE_FAILED_TEXT, SAVE_FAILED_HINT_S)
