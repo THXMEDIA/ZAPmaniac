@@ -8,6 +8,8 @@ const ExplorerCitiesReg := preload("res://scripts/explorer_cities.gd")
 signal start_pressed
 signal resume_pressed
 signal restart_pressed
+## E33: speedrun only — a fresh run on a different level (pause, game over).
+signal new_level_pressed
 ## Explorer city chosen on the start screen (explorer_cities.gd id).
 signal explorer_pressed(city_id: String)
 ## UX-K2: back to the start screen (pause after the confirmation in a
@@ -75,6 +77,10 @@ var game_hud: Control
 
 var start_panel: PanelContainer
 var pause_restart_btn: Button
+## E33: NEUES LEVEL in the pause and on the game over (speedrun only).
+var pause_new_level_btn: Button
+var gameover_new_level_btn: Button
+var gameover_restart_btn: Button
 var pause_confirm_q: Label
 var pause_confirm_yes: Button
 ## Versus screens (lobby, race bar, countdown, result) — versus_ui.gd (E17).
@@ -92,6 +98,14 @@ var pause_note_label: Label
 var menu_btn: Button
 var menu_confirm_row: Control
 var _menu_needs_confirm := true
+## E33 / UX-W4: NEUSTART and NEUES LEVEL in the pause ask first once the run
+## is past its first level (main.gd sets it on every pause).
+var _restart_needs_confirm := false
+## Which pause button the open question belongs to: "menu", "restart",
+## "new_level" ("" = none open).
+var _confirm_action := ""
+var _versus_pause := false
+var pause_confirm_no: Button
 ## Board chip (BRETT): "KW 40" on the weekly board, "CHAOS", "CHAT".
 var board_label: Label
 var board_chip: Control
@@ -829,8 +843,10 @@ func set_rain_option_visible(on: bool) -> void:
 		reduce_rain_pause.visible = on
 
 
-## Pause (UX-K2): WEITER / NEUSTART / HAUPTMENÜ — HAUPTMENÜ asks once in a
-## speedrun ("Lauf abbrechen?") — and the comfort block.
+## Pause (UX-K2): WEITER / NEUSTART / (NEUES LEVEL, speedrun only, E33) /
+## STEUERUNG / HAUPTMENÜ — HAUPTMENÜ asks once in a speedrun ("Lauf
+## abbrechen?"), NEUSTART and NEUES LEVEL once the run is past its first
+## level (UX-W4) — and the comfort block.
 func _build_pause_panel() -> void:
 	pause_panel = _overlay_panel()
 	pause_panel.visible = false
@@ -842,9 +858,13 @@ func _build_pause_panel() -> void:
 	resume_btn.pressed.connect(func(): resume_pressed.emit())
 	box.add_child(resume_btn)
 	var restart_btn := _make_button("NEUSTART")
-	restart_btn.pressed.connect(func(): restart_pressed.emit())
+	restart_btn.pressed.connect(func(): _on_pause_confirmable_pressed("restart"))
 	box.add_child(restart_btn)
 	pause_restart_btn = restart_btn
+	pause_new_level_btn = _make_button("NEUES LEVEL")
+	pause_new_level_btn.pressed.connect(func(): _on_pause_confirmable_pressed("new_level"))
+	pause_new_level_btn.visible = false
+	box.add_child(pause_new_level_btn)
 	controls_pause_btn = _make_button("STEUERUNG")
 	controls_pause_btn.pressed.connect(func(): show_controls(pause_panel))
 	box.add_child(controls_pause_btn)
@@ -867,15 +887,14 @@ func _build_pause_panel() -> void:
 	yes.text = "JA, ZUM MENÜ"
 	pause_confirm_yes = yes
 	yes.custom_minimum_size = Vector2(150, 40)
-	yes.pressed.connect(func():
-		menu_confirm_row.visible = false
-		menu_pressed.emit())
+	yes.pressed.connect(func(): _emit_confirmed(_confirm_action))
 	row.add_child(yes)
 	var no := Button.new()
 	no.text = "NEIN"
 	no.custom_minimum_size = Vector2(110, 40)
 	no.pressed.connect(cancel_menu_confirm)
 	row.add_child(no)
+	pause_confirm_no = no
 	menu_confirm_row = confirm
 	comfort_pause_block = _build_comfort_block()
 	reduce_fx_pause = comfort_pause_block.get_meta("reduce_fx")
@@ -886,10 +905,12 @@ func _build_pause_panel() -> void:
 ## Versus pause (QA N1, design W6): no NEUSTART, HAUPTMENÜ becomes
 ## MATCH AUFGEBEN with its own question, the note says the clock runs on.
 func set_versus_pause(on: bool) -> void:
+	_versus_pause = on
 	pause_restart_btn.visible = not on
+	if on:
+		pause_new_level_btn.visible = false
 	menu_btn.text = "MATCH AUFGEBEN" if on else "HAUPTMENÜ"
-	pause_confirm_q.text = "Match aufgeben? Der Gegner gewinnt kampflos." if on else "Lauf abbrechen? Die Zeit dieses Levels wird nicht gewertet."
-	pause_confirm_yes.text = "JA, AUFGEBEN" if on else "JA, ZUM MENÜ"
+	_set_confirm_texts("menu")
 	if on:
 		pause_note_label.text = "Die Rennuhr läuft weiter – der Gegner läuft auch."
 
@@ -902,23 +923,78 @@ func set_condition_card_top(px: float) -> void:
 ## Whether HAUPTMENÜ in the pause asks first (speedrun: yes; Manhattan: no).
 func set_menu_confirm(needed: bool) -> void:
 	_menu_needs_confirm = needed
-	menu_confirm_row.visible = false
+	cancel_menu_confirm()
+
+
+## E33 / UX-W4: whether NEUSTART / NEUES LEVEL in the pause ask first
+## (speedrun past its first level: yes; first level, Training, Explorer: no).
+func set_restart_confirm(needed: bool) -> void:
+	_restart_needs_confirm = needed
+	cancel_menu_confirm()
+
+
+## E33: NEUES LEVEL only in a speedrun (not Explorer, Training, Versus).
+func set_new_level_visible(on: bool) -> void:
+	pause_new_level_btn.visible = on and not _versus_pause
+	gameover_new_level_btn.visible = on
 
 
 func _on_pause_menu_pressed() -> void:
-	if _menu_needs_confirm and not menu_confirm_row.visible:
+	_on_pause_confirmable_pressed("menu")
+
+
+## The pause's one question row serves HAUPTMENÜ, NEUSTART and NEUES LEVEL
+## (UX-K2 pattern): the first press asks, the same button again or JA
+## confirms, NEIN or Esc cancels. The focus goes to NEIN, so keyboard and
+## controller land on the safe answer.
+func _on_pause_confirmable_pressed(action: String) -> void:
+	var needed := _menu_needs_confirm if action == "menu" else _restart_needs_confirm
+	if needed and not (menu_confirm_row.visible and _confirm_action == action):
+		_set_confirm_texts(action)
+		_confirm_action = action
 		menu_confirm_row.visible = true
+		pause_confirm_no.grab_focus.call_deferred()
 		return
-	menu_confirm_row.visible = false
-	menu_pressed.emit()
+	_emit_confirmed(action)
 
 
+func _set_confirm_texts(action: String) -> void:
+	match action:
+		"restart":
+			pause_confirm_q.text = "Lauf neu starten? Der bisherige Lauf geht verloren, das Level beginnt von vorn."
+			pause_confirm_yes.text = "JA, NEUSTART"
+		"new_level":
+			pause_confirm_q.text = "Neues Level starten? Der bisherige Lauf geht verloren."
+			pause_confirm_yes.text = "JA, NEUES LEVEL"
+		_:
+			pause_confirm_q.text = "Match aufgeben? Der Gegner gewinnt kampflos." if _versus_pause else "Lauf abbrechen? Die Zeit dieses Levels wird nicht gewertet."
+			pause_confirm_yes.text = "JA, AUFGEBEN" if _versus_pause else "JA, ZUM MENÜ"
+
+
+func _emit_confirmed(action: String) -> void:
+	cancel_menu_confirm()
+	match action:
+		"restart":
+			restart_pressed.emit()
+		"new_level":
+			new_level_pressed.emit()
+		"menu":
+			menu_pressed.emit()
+
+
+## True while the pause shows a question (HAUPTMENÜ, NEUSTART, NEUES LEVEL).
 func is_menu_confirm_open() -> bool:
 	return pause_panel.visible and menu_confirm_row.visible
 
 
+## Which question is open ("" = none).
+func confirm_action() -> String:
+	return _confirm_action if is_menu_confirm_open() else ""
+
+
 func cancel_menu_confirm() -> void:
 	menu_confirm_row.visible = false
+	_confirm_action = ""
 
 
 ## ---------------- Bestenliste (spec 2.5, UX-W6) ----------------
@@ -1287,7 +1363,7 @@ func _cond_tag_color(tag: String) -> Color:
 	return MUTED
 
 
-## Game over (UX-K2): NOCHMAL / HAUPTMENÜ / BESTENLISTE.
+## Game over (UX-K2, E33): NOCHMAL / (NEUES LEVEL) / HAUPTMENÜ / BESTENLISTE.
 func _build_gameover_panel() -> void:
 	gameover_panel = _overlay_panel()
 	gameover_panel.visible = false
@@ -1305,9 +1381,16 @@ func _build_gameover_panel() -> void:
 	gameover_note_label.visible = false
 	box.add_child(gameover_note_label)
 
+	# E33: NOCHMAL restarts the level of the death, NEUES LEVEL (speedrun
+	# only) starts a fresh run on another one — no question on this screen.
 	var btn := _make_button("NOCHMAL")
 	btn.pressed.connect(func(): restart_pressed.emit())
 	box.add_child(btn)
+	gameover_restart_btn = btn
+	gameover_new_level_btn = _make_button("NEUES LEVEL")
+	gameover_new_level_btn.pressed.connect(func(): new_level_pressed.emit())
+	gameover_new_level_btn.visible = false
+	box.add_child(gameover_new_level_btn)
 	var menu := _make_button("HAUPTMENÜ")
 	menu.pressed.connect(func(): menu_pressed.emit())
 	box.add_child(menu)
