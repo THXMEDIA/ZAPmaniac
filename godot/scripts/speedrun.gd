@@ -50,6 +50,11 @@ var loaded_version := 0
 
 var _loaded := false
 var _read_only := false
+## Code-K1: false after the last save could not be written. The file on disk
+## then still holds the state of the last successful save (write_atomic never
+## replaces it half-way), the new values live only in memory and go out with
+## the next successful save. Callers learn it from record_level_time()["saved"].
+var last_save_ok := true
 
 
 func _ready() -> void:
@@ -124,10 +129,12 @@ func record_level_time(level_id: String, elapsed_seconds: float, board: String =
 		bonus_unlocked = true
 		newly_unlocked = true
 
+	var saved := true
 	if is_new_best or newly_unlocked:
-		_save()
+		saved = _save()
 
 	return {
+		"saved": saved,
 		"is_new_best": is_new_best,
 		"previous_best": previous_best,
 		"beat_target": beat_target,
@@ -243,13 +250,21 @@ func _load() -> void:
 		SavePathsScript.backup_corrupt(path)
 
 
-func _save() -> void:
+## Writes the whole state. Returns false (and logs an error) when the file
+## could not be written: the old file stays exactly as it was — also an older
+## version that was migrated in memory on load, so a failed save never leaves
+## a half-migrated file behind (Code-K1). A read-only (newer) file counts as
+## nothing to write.
+func _save() -> bool:
 	if _read_only:
-		return
+		return true
 	var payload := {"version": SAVE_VERSION, "best_times": best_times, "bonus_unlocked": bonus_unlocked}
 	if not archive.is_empty():
 		payload["archive"] = archive
-	SavePathsScript.write_atomic(save_path(), JSON.stringify(payload))
+	last_save_ok = SavePathsScript.write_atomic(save_path(), JSON.stringify(payload))
+	if not last_save_ok:
+		push_error("Speedrun: could not write %s — the file keeps its previous state" % save_path())
+	return last_save_ok
 
 
 ## Version of a parsed save: the "version" field if it is a whole number,

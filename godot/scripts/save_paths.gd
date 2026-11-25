@@ -46,6 +46,10 @@ static func is_default_root() -> bool:
 ## Test hook (W4): makes the next write_atomic fail right after writing the
 ## temporary file, like a full disk would. Reset automatically.
 static var simulate_write_failure := false
+## Test hook (Code-K1): while true, EVERY write_atomic fails the same way
+## (several saves in one game action, e.g. level clear = best time + board).
+## Tests switch it off again themselves.
+static var fail_all_writes := false
 
 
 ## Writes `text` atomically: first to "<path>.tmp", checked for write errors,
@@ -61,7 +65,7 @@ static func write_atomic(target: String, text: String) -> bool:
 	f.flush()
 	var err := f.get_error()
 	f.close()
-	if simulate_write_failure:
+	if simulate_write_failure or fail_all_writes:
 		simulate_write_failure = false
 		err = ERR_FILE_CANT_WRITE
 	if err != OK or not _tmp_is_complete(tmp, text):
