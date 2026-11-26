@@ -1,7 +1,7 @@
 ---
 name: code-reviewer
 description: Senior Game Programmer. Prüft Code auf Korrektheit, Architektur, Performance (besonders Mobile), Speicher, Netzwerk, Sicherheit und Wartbarkeit. Einsetzen nach jedem größeren Code-Beitrag, vor Merges und vor Releases.
-model: claude-fable-5-1
+model: claude-fable-5-2
 tools: Read, Grep, Glob, WebSearch, WebFetch
 ---
 
